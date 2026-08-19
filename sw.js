@@ -2,7 +2,7 @@
  * ナビゲーションはネットワーク優先（更新をすぐ反映）、
  * 静的ファイルはキャッシュ優先＋裏で更新（表示を待たせない）。
  * 計測データは localStorage 側にあり、ここでは扱わない。 */
-var CACHE = 'ct-checker-v5';
+var CACHE = 'ct-checker-v6';
 var SHELL = [
   './',
   './index.html',
@@ -21,6 +21,11 @@ self.addEventListener('install', function (e) {
       .then(function () { return self.skipWaiting(); })
       .catch(function () { /* 一部取得できなくても続行 */ })
   );
+});
+
+// 画面の「更新」ボタンから、待機中の新しいワーカーを即座に有効にする
+self.addEventListener('message', function (e) {
+  if (e.data === 'skip-waiting') self.skipWaiting();
 });
 
 self.addEventListener('activate', function (e) {

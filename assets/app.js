@@ -1610,6 +1610,23 @@
   /** 上部の警告バー（新しい形式のデータ・データ減少を検出したときなど） */
   function renderAlert() {
     var bar = $('alertbar');
+    if (swUpdateReady) {
+      bar.hidden = false;
+      bar.dataset.kind = 'info';
+      $('alertbar-text').textContent = '新しいバージョンがあります。更新すると最新の画面になります。';
+      $('alertbar-action').textContent = '更新';
+      $('alertbar-action').onclick = function () {
+        if (navigator.serviceWorker && navigator.serviceWorker.getRegistration) {
+          navigator.serviceWorker.getRegistration().then(function (reg) {
+            if (reg && reg.waiting) reg.waiting.postMessage('skip-waiting');
+            location.reload();
+          }).catch(function () { location.reload(); });
+        } else {
+          location.reload();
+        }
+      };
+      return;
+    }
     if (rescueNotice) {
       bar.hidden = false;
       bar.dataset.kind = 'info';
@@ -3081,13 +3098,41 @@
     } catch (e) { return false; }
   }
 
-  /** GitHub Pages などに置いたときはオフラインでも開けるようにする。 */
+  /**
+   * GitHub Pages などに置いたときはオフラインでも開けるようにする。
+   * ホーム画面に追加したアプリは古いまま取り残されやすいので、
+   * 起動のたびに更新を確認し、新しい版が来たら画面で知らせる。
+   */
+  var swUpdateReady = false;
+
+  function watchWorker(reg) {
+    if (!reg) return;
+    if (reg.waiting && navigator.serviceWorker.controller) { swUpdateReady = true; renderAlert(); }
+    reg.addEventListener('updatefound', function () {
+      var sw = reg.installing;
+      if (!sw) return;
+      sw.addEventListener('statechange', function () {
+        if (sw.state === 'installed' && navigator.serviceWorker.controller) {
+          swUpdateReady = true;
+          renderAlert();
+        }
+      });
+    });
+  }
+
   function registerServiceWorker() {
     if (!('serviceWorker' in navigator)) return;
     if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') return;
     if (typeof window.claude !== 'undefined') return;   // 共有ページでは登録しない
     try {
-      navigator.serviceWorker.register('sw.js').catch(function () { /* 失敗しても通常動作 */ });
+      navigator.serviceWorker.register('sw.js').then(function (reg) {
+        watchWorker(reg);
+        reg.update().catch(function () { /* noop */ });
+        // アプリを開き直したときにも更新を取りに行く
+        document.addEventListener('visibilitychange', function () {
+          if (document.visibilityState === 'visible') reg.update().catch(function () { /* noop */ });
+        });
+      }).catch(function () { /* 失敗しても通常動作 */ });
     } catch (e) { /* noop */ }
   }
 
