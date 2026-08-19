@@ -1497,40 +1497,46 @@
   var EL_OPEN = {};   // 要素作業の開閉を再描画でも保つ
 
   function renderProcList() {
-    var locked = anyStarted() || hasData();
     var host = $('proc-list');
     host.innerHTML = groups().map(function (g, gi) {
       var list = stationsOf(g);
       var rows = list.map(function (p) {
         var els = pElements(p);
+        // 要素作業の増減だけは、記録済みのサイクルと辻褄が合わなくなるので止める
+        var elLocked = p.cycles.length > 0;
         return '<li class="stn">' +
           '<div class="stn__head">' +
-            '<span class="swatch" style="background:' + seriesVar(gi) + '"></span>' +
+            '<span class="swatch" style="' + swatchBg(gi) + '"></span>' +
             '<input type="text" value="' + esc(p.name) + '" data-act="rename-station" data-id="' + esc(p.id) +
-              '" maxlength="24" aria-label="ステーション名"' + (locked ? ' disabled' : '') + '>' +
-            (locked || list.length < 2 ? '' :
+              '" maxlength="24" aria-label="ステーション名">' +
+            (list.length < 2 && groups().length < 2 ? '' :
               '<button type="button" class="btn btn--icon" data-act="del-station" data-id="' + esc(p.id) +
               '" aria-label="ステーションを削除">✕</button>') +
           '</div>' +
           '<details class="stn__els" data-station="' + esc(p.id) + '"' +
             (els.length > 1 || EL_OPEN[p.id] ? ' open' : '') + '>' +
-            '<summary>要素作業 ' + els.length + ' 個' + (els.length > 1 ? '' : '（分割なし）') + '</summary>' +
+            '<summary>要素作業 ' + els.length + ' 個' + (els.length > 1 ? '' : '（分割なし）') +
+              (elLocked ? '・記録があるため変更不可' : '') + '</summary>' +
             '<ul class="elements__list">' + els.map(function (e, j) {
               return '<li class="elements__item">' +
                 '<span class="elements__index">' + (j + 1) + '</span>' +
                 '<input type="text" value="' + esc(e.name) + '" data-act="rename-element" data-id="' + esc(p.id) +
-                  '" data-i="' + j + '" maxlength="24" aria-label="要素作業名"' + (locked ? ' disabled' : '') + '>' +
-                (locked ? '' : '<button type="button" class="btn btn--icon" data-act="del-element" data-id="' +
+                  '" data-i="' + j + '" maxlength="24" aria-label="要素作業名">' +
+                (elLocked ? '' : '<button type="button" class="btn btn--icon" data-act="del-element" data-id="' +
                   esc(p.id) + '" data-i="' + j + '" aria-label="要素作業を削除">✕</button>') +
                 '</li>';
             }).join('') + '</ul>' +
-            (locked ? '' :
-              '<div class="elements__add">' +
-                '<input type="text" data-act="new-element" data-id="' + esc(p.id) +
-                  '" placeholder="要素作業を追加" maxlength="24"' + (els.length >= MAX_ELEMENTS ? ' disabled' : '') + '>' +
-                '<button type="button" class="btn btn--sm" data-act="add-element" data-id="' + esc(p.id) + '"' +
-                  (els.length >= MAX_ELEMENTS ? ' disabled' : '') + '>追加</button>' +
-              '</div>') +
+            (elLocked
+              ? '<p class="hint">このステーションには ' + p.cycles.length +
+                ' サイクルの記録があります。要素作業を増減すると記録と食い違うため、' +
+                '変更したいときは記録を消すか、新しいステーションを作ってください。</p>'
+              : '<div class="elements__add">' +
+                  '<input type="text" data-act="new-element" data-id="' + esc(p.id) +
+                    '" placeholder="要素作業を追加" maxlength="24"' +
+                    (els.length >= MAX_ELEMENTS ? ' disabled' : '') + '>' +
+                  '<button type="button" class="btn btn--sm" data-act="add-element" data-id="' + esc(p.id) + '"' +
+                    (els.length >= MAX_ELEMENTS ? ' disabled' : '') + '>追加</button>' +
+                '</div>') +
           '</details>' +
         '</li>';
       }).join('');
@@ -1540,9 +1546,9 @@
           '<span class="elements__index">' + (gi + 1) + '</span>' +
           '<span class="swatch" style="' + swatchBg(gi) + '"></span>' +
           '<input type="text" value="' + esc(g.name) + '" data-act="rename-group" data-id="' + esc(g.id) +
-            '" maxlength="20" aria-label="工程名"' + (locked ? ' disabled' : '') + '>' +
+            '" maxlength="20" aria-label="工程名">' +
           '<span class="proc__count">' + list.length + ' ST</span>' +
-          (locked || groups().length < 2 ? '' :
+          (groups().length < 2 ? '' :
             '<button type="button" class="btn btn--icon" data-act="del-group" data-id="' + esc(g.id) +
             '" aria-label="工程を削除">✕</button>') +
         '</div>' +
@@ -1553,15 +1559,15 @@
     }).join('');
 
     var full = stations().length >= MAX_STATIONS;
-    $('in-proc').disabled = locked || groups().length >= MAX_GROUPS;
-    $('btn-add-proc').disabled = locked || groups().length >= MAX_GROUPS;
-    $('in-station').disabled = locked || full;
-    $('btn-add-station').disabled = locked || full;
+    $('in-proc').disabled = groups().length >= MAX_GROUPS;
+    $('btn-add-proc').disabled = groups().length >= MAX_GROUPS;
+    $('in-station').disabled = full;
+    $('btn-add-station').disabled = full;
 
     // 追加先の工程。工程が1つだけなら選ばせない
     var sel = $('in-station-group');
     var many = groups().length > 1;
-    sel.hidden = !many || locked;
+    sel.hidden = !many;
     if (many) {
       var cur = sel.value;
       sel.innerHTML = groups().map(function (g) {
@@ -1571,15 +1577,13 @@
     }
 
     var hint = $('proc-hint');
-    if (locked) {
-      hint.textContent = '記録したサイクルがあるため構成は変更できません。変更するには「全データ消去」してください。';
-      hint.className = 'hint hint--warn';
-    } else if (full) {
+    if (full) {
       hint.textContent = 'ステーションは全体で最大 ' + MAX_STATIONS + ' 個までです。';
       hint.className = 'hint hint--warn';
     } else {
-      hint.textContent = '登録済み：工程 ' + groups().length + ' / ' + MAX_GROUPS +
-        '、ステーション ' + stations().length + ' / ' + MAX_STATIONS + '。';
+      hint.textContent = '名前の変更と追加は計測中でもできます。削除すると、そのステーションの記録も消えます。' +
+        '（登録済み：工程 ' + groups().length + ' / ' + MAX_GROUPS +
+        '、ステーション ' + stations().length + ' / ' + MAX_STATIONS + '）';
       hint.className = 'hint';
     }
   }
@@ -2869,8 +2873,13 @@
         var g = groupById(id);
         var rest = stations().filter(function (p) { return p.groupId !== id; });
         if (!rest.length) { toast('ステーションが無くなるため削除できません'); return; }
-        if (stationsOf(g).length && !confirm('「' + g.name + '」と、その中の ' + stationsOf(g).length +
-          ' ステーションを削除します。よろしいですか？')) return;
+        var members = stationsOf(g);
+        var cyc = members.reduce(function (a, x) { return a + x.cycles.length; }, 0);
+        if (members.length && !confirm('「' + g.name + '」と、その中の ' + members.length +
+          ' ステーションを削除します。' + (cyc ? '記録済みの ' + cyc + ' サイクルも消えます。' : '') +
+          '\nよろしいですか？')) return;
+        if (cyc) autoArchive('工程の削除前');
+        members.forEach(function (x) { delete RUN[x.id]; });
         state.stations = rest;
         state.groups = groups().filter(function (x) { return x.id !== id; });
         if (state.focus === id) state.focus = 'all';
@@ -2878,12 +2887,20 @@
         afterStructureChange();
       } else if (act === 'del-station') {
         if (stations().length <= 1) { toast('ステーションは1つ以上必要です'); return; }
+        var target = stationById(id);
+        if (target && target.cycles.length) {
+          if (!confirm('「' + target.name + '」を削除します。記録済みの ' + target.cycles.length +
+            ' サイクルも消えます。\nよろしいですか？')) return;
+          autoArchive('ステーションの削除前');
+        }
+        delete RUN[id];
         state.stations = stations().filter(function (p) { return p.id !== id; });
         state.view = validView(state, state.view);
         afterStructureChange();
       } else if (act === 'del-element') {
         var p = stationById(id);
         if (!p) return;
+        if (p.cycles.length) { toast('記録があるため要素作業は変更できません'); return; }
         if (p.elements.length <= 1) { toast('要素作業は1つ以上必要です'); return; }
         p.elements.splice(+b.getAttribute('data-i'), 1);
         afterStructureChange();
@@ -3068,6 +3085,7 @@
   function addElement(stationId) {
     var p = stationById(stationId);
     if (!p) return;
+    if (p.cycles.length) { toast('記録があるため要素作業は変更できません'); return; }
     var input = document.querySelector('[data-act="new-element"][data-id="' + stationId + '"]');
     var name = input ? input.value.trim() : '';
     if (!name) { if (input) input.focus(); return; }
