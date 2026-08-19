@@ -40,21 +40,21 @@
 
 <div id="help" class="help" hidden>
   <h2>使い方</h2>
-  <p class="help__lead"><strong>工程</strong>（大工程）でまとめ、その中の<strong>ステーション</strong>（小工程＝人が立つ持ち場）ごとに計測します。ストップウォッチはステーション単位、グラフの色は工程単位です。</p>
+  <p class="help__lead"><strong>ステーション</strong>（実際に人が立つ持ち場）ごとのストップウォッチです。<strong>工程</strong>はステーションをまとめる箱で、色分けと集計に使います。</p>
   <ol>
-    <li><strong>設定</strong>で工程とステーションを登録し、タクトタイムを入れます。1サイクルをさらに細かく観測したいステーションには「要素作業」を追加します。</li>
-    <li>ステーションごとに独立したストップウォッチです。各カードの大ボタンで開始、<strong>停止</strong>でそのステーションだけ止まります。下のボタンでまとめて開始／停止もできます。</li>
-    <li>動いているステーションのボタンを、そこが1サイクル終わるたびに押します。止まっているステーションはボタンを押すとその場から動きだします。</li>
+    <li><strong>設定</strong>で測りたい<strong>ステーション</strong>を登録します（工程は分けたいときだけでOK）。タクトタイムもここで入れます。</li>
+    <li>カードを<strong>タップするとスタート、もう一度タップでストップ</strong>。ストップウォッチと同じ動きです。</li>
+    <li>止めた時間でよければ<strong>保存</strong>を押すと1サイクルとして記録され、0に戻ります。測り直すときは<strong>リセット</strong>。</li>
+    <li>止めずに<strong>保存</strong>を押すと、その時点で区切って計測を続けます（連続で測りたいときに便利）。</li>
     <li>ステーションが多いときは、計測パネル上部の<strong>工程チップ</strong>で表示を1工程に絞れます。</li>
-    <li>押し間違えたら<strong>取消</strong>、測り直したいサイクルは<strong>破棄</strong>。停止中の時間は計測に含まれません。</li>
-    <li>集計・グラフ・明細は<strong>表示切替</strong>で「ライン全体 → 工程 → ステーション」と掘り下げられます。異常値は明細の「除外」で統計から外せます。</li>
+    <li>集計・グラフ・明細は<strong>表示切替</strong>で「ライン全体 → 工程 → ステーション」と掘り下げられます。外れた値は明細の「除外」で統計から外せます。</li>
     <li>データは自動でブラウザに保存されます。<strong>測定を保存</strong>すると名前を付けて残せ、CSV / JSON で書き出せます。</li>
   </ol>
   <h3>キーボード操作</h3>
   <ul class="help__keys">
-    <li><kbd>Space</kbd> / <kbd>Enter</kbd> 表示中の先頭ステーションのラップ</li>
-    <li><kbd>1</kbd>…<kbd>9</kbd> カード右上の番号のステーションのラップ</li>
-    <li><kbd>P</kbd> 表示中のステーションをまとめて一時停止 / 再開　　<kbd>Z</kbd> 直前を取消</li>
+    <li><kbd>Space</kbd> / <kbd>Enter</kbd> 先頭ステーションのスタート / ストップ</li>
+    <li><kbd>1</kbd>…<kbd>9</kbd> カード右上の番号のステーションのスタート / ストップ</li>
+    <li><kbd>S</kbd> 保存　　<kbd>P</kbd> 表示中をまとめてスタート / ストップ　　<kbd>Z</kbd> 直前のサイクルを取消</li>
   </ul>
 </div>
 
@@ -135,10 +135,11 @@
     </div>
 
     <div class="controls" id="controls">
-      <button type="button" id="btn-pause" class="btn">計測開始</button>
+      <button type="button" id="btn-pause" class="btn">スタート</button>
+      <button type="button" id="btn-save-cycle" class="btn" disabled>保存</button>
+      <button type="button" id="btn-clear" class="btn" disabled>リセット</button>
       <button type="button" id="btn-undo" class="btn" disabled>直前を取消</button>
-      <button type="button" id="btn-discard" class="btn" disabled>サイクル破棄</button>
-      <button type="button" id="btn-reset" class="btn btn--danger" disabled>リセット</button>
+      <button type="button" id="btn-reset" class="btn btn--danger" disabled>全データ消去</button>
     </div>
     <p class="status-line" id="status-line" role="status" aria-live="polite">未計測です。設定を確認して「計測開始」を押してください。</p>
   </section>
@@ -234,6 +235,7 @@
     <div class="panel__head">
       <h2 id="h-table">明細<span class="panel__scope" id="scope-table"></span></h2>
       <div class="panel__head-actions">
+        <button type="button" id="btn-undo-cycle" class="btn btn--sm" hidden>直前のサイクルを取消</button>
         <button type="button" id="btn-csv" class="btn btn--sm">CSV書き出し</button>
         <button type="button" id="btn-json" class="btn btn--sm">JSON書き出し</button>
         <label class="btn btn--sm btn--file">JSON読み込み<input type="file" id="file-json" accept=".json,application/json"></label>
@@ -290,13 +292,23 @@
 
     <div class="elements">
       <div class="elements__head">
-        <h3>工程とステーション</h3>
-        <p class="hint" id="proc-hint"></p>
+        <h3>ステーションと工程</h3>
+        <p class="hint hint--lead">
+          <strong>ステーション</strong>＝実際に人が立つ持ち場。ここが計測の単位です。<br>
+          <strong>工程</strong>＝ステーションをまとめる箱（色分けと集計に使います）。
+          まずはステーションを足すだけで使えます。
+        </p>
       </div>
+      <div class="addbar">
+        <input type="text" id="in-station" placeholder="ステーション名（例）ねじ締め" maxlength="24">
+        <select id="in-station-group" class="addbar__select" aria-label="追加先の工程" hidden></select>
+        <button type="button" id="btn-add-station" class="btn btn--primary">＋ ステーションを追加</button>
+      </div>
+      <p class="hint" id="proc-hint"></p>
       <div id="proc-list"></div>
       <div class="elements__add">
-        <input type="text" id="in-proc" placeholder="工程名（大工程）（例）組立" maxlength="20">
-        <button type="button" id="btn-add-proc" class="btn">工程を追加</button>
+        <input type="text" id="in-proc" placeholder="工程名（例）組立　※分けたいときだけ" maxlength="20">
+        <button type="button" id="btn-add-proc" class="btn">＋ 工程を追加</button>
       </div>
     </div>
   </section>
