@@ -887,3 +887,16 @@ main.slide-r { animation: slide-from-left .16s ease-out; }
 .setup-note__body span { font-size: 12.5px; color: var(--text-secondary); }
 .setup-note__actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .setup-note__actions .btn { flex: 1 1 auto; }
+
+/* 設定の削除ボタン。指で押せる大きさを確保する */
+.btn--del {
+  flex: none; min-height: 40px; padding: 6px 12px;
+  color: var(--critical); font-weight: 600;
+}
+.btn--del:hover:not(:disabled) { background: color-mix(in srgb, var(--critical) 10%, transparent); }
+.elements__item .btn--del { min-height: 34px; padding: 4px 10px; font-size: 12px; }
+@media (max-width: 700px) {
+  .btn--del { min-height: 44px; }
+  .proc__head, .stn__head { gap: 6px; }
+  .proc__count { display: none; }
+}

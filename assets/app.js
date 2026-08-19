@@ -1509,9 +1509,8 @@
             '<span class="swatch" style="' + swatchBg(gi) + '"></span>' +
             '<input type="text" value="' + esc(p.name) + '" data-act="rename-station" data-id="' + esc(p.id) +
               '" maxlength="24" aria-label="ステーション名">' +
-            (list.length < 2 && groups().length < 2 ? '' :
-              '<button type="button" class="btn btn--icon" data-act="del-station" data-id="' + esc(p.id) +
-              '" aria-label="ステーションを削除">✕</button>') +
+            '<button type="button" class="btn btn--sm btn--del" data-act="del-station" data-id="' + esc(p.id) +
+              '" aria-label="' + esc(p.name) + ' を削除">削除</button>' +
           '</div>' +
           '<details class="stn__els" data-station="' + esc(p.id) + '"' +
             (els.length > 1 || EL_OPEN[p.id] ? ' open' : '') + '>' +
@@ -1522,8 +1521,8 @@
                 '<span class="elements__index">' + (j + 1) + '</span>' +
                 '<input type="text" value="' + esc(e.name) + '" data-act="rename-element" data-id="' + esc(p.id) +
                   '" data-i="' + j + '" maxlength="24" aria-label="要素作業名">' +
-                (elLocked ? '' : '<button type="button" class="btn btn--icon" data-act="del-element" data-id="' +
-                  esc(p.id) + '" data-i="' + j + '" aria-label="要素作業を削除">✕</button>') +
+                (elLocked ? '' : '<button type="button" class="btn btn--sm btn--del" data-act="del-element" data-id="' +
+                  esc(p.id) + '" data-i="' + j + '" aria-label="' + esc(e.name) + ' を削除">削除</button>') +
                 '</li>';
             }).join('') + '</ul>' +
             (elLocked
@@ -1548,9 +1547,8 @@
           '<input type="text" value="' + esc(g.name) + '" data-act="rename-group" data-id="' + esc(g.id) +
             '" maxlength="20" aria-label="工程名">' +
           '<span class="proc__count">' + list.length + ' ST</span>' +
-          (groups().length < 2 ? '' :
-            '<button type="button" class="btn btn--icon" data-act="del-group" data-id="' + esc(g.id) +
-            '" aria-label="工程を削除">✕</button>') +
+          '<button type="button" class="btn btn--sm btn--del" data-act="del-group" data-id="' + esc(g.id) +
+            '" aria-label="' + esc(g.name) + ' を削除">削除</button>' +
         '</div>' +
         '<div class="proc__body">' +
           '<ul class="stn__list">' + rows + '</ul>' +
@@ -2869,10 +2867,9 @@
       var act = b.getAttribute('data-act');
       var id = b.getAttribute('data-id');
       if (act === 'del-group') {
-        if (groups().length <= 1) { toast('工程は1つ以上必要です'); return; }
+        if (groups().length <= 1) { toast('工程は1つ以上必要です。名前を変えて使ってください'); return; }
         var g = groupById(id);
         var rest = stations().filter(function (p) { return p.groupId !== id; });
-        if (!rest.length) { toast('ステーションが無くなるため削除できません'); return; }
         var members = stationsOf(g);
         var cyc = members.reduce(function (a, x) { return a + x.cycles.length; }, 0);
         if (members.length && !confirm('「' + g.name + '」と、その中の ' + members.length +
@@ -2882,11 +2879,11 @@
         members.forEach(function (x) { delete RUN[x.id]; });
         state.stations = rest;
         state.groups = groups().filter(function (x) { return x.id !== id; });
+        ensureStation();
         if (state.focus === id) state.focus = 'all';
         state.view = validView(state, state.view);
         afterStructureChange();
       } else if (act === 'del-station') {
-        if (stations().length <= 1) { toast('ステーションは1つ以上必要です'); return; }
         var target = stationById(id);
         if (target && target.cycles.length) {
           if (!confirm('「' + target.name + '」を削除します。記録済みの ' + target.cycles.length +
@@ -2895,6 +2892,7 @@
         }
         delete RUN[id];
         state.stations = stations().filter(function (p) { return p.id !== id; });
+        ensureStation();
         state.view = validView(state, state.view);
         afterStructureChange();
       } else if (act === 'del-element') {
@@ -3046,6 +3044,13 @@
       rt = setTimeout(renderCharts, 150);
     });
     window.addEventListener('beforeunload', save);
+  }
+
+  /** ステーションが 0 になると計測できなくなるので、空のものを1つ用意する。 */
+  function ensureStation() {
+    if (stations().length) return;
+    state.stations.push(newStation('ステーション1', groups()[0].id));
+    toast('最後の1つは消せないため、空のステーションを用意しました');
   }
 
   function afterStructureChange() {
