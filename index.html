@@ -20,6 +20,11 @@
 <body>
 <a class="skip-link" href="#measure">計測パネルへスキップ</a>
 
+<div class="alertbar" id="alertbar" hidden>
+  <span id="alertbar-text"></span>
+  <button type="button" class="btn btn--sm" id="alertbar-action"></button>
+</div>
+
 <header class="app-bar">
   <div class="app-bar__title">
     <span class="app-bar__mark" aria-hidden="true">⏱</span>
@@ -48,6 +53,7 @@
     <li>止めずに<strong>保存</strong>を押すと、その時点で区切って計測を続けます（連続で測りたいときに便利）。</li>
     <li>ステーションが多いときは、計測パネル上部の<strong>工程チップ</strong>で表示を1工程に絞れます。</li>
     <li>集計・グラフ・明細は<strong>表示切替</strong>で「ライン全体 → 工程 → ステーション」と掘り下げられます。外れた値は明細の「除外」で統計から外せます。</li>
+    <li>画面の切り替えは下のタブのほか、<strong>左右スワイプ</strong>でもできます。</li>
     <li>データは自動でブラウザに保存されます。<strong>測定を保存</strong>すると名前を付けて残せ、CSV / JSON で書き出せます。</li>
   </ol>
   <h3>キーボード操作</h3>

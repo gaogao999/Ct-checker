@@ -14,7 +14,9 @@
   'use strict';
 
   var STORE_KEY = 'ct-checker:v1';
+  var PREV_KEY = 'ct-checker:prev:v1';     // 読み込み直前の中身（まるごと1世代分の控え）
   var SESSION_KEY = 'ct-checker:sessions:v1';
+  var SCHEMA = 3;                          // 保存形式。これより新しいデータは書き換えない
   var THEME_KEY = 'ct-checker:theme';
   var MAX_ELEMENTS = 8;
   var MAX_GROUPS = 8;      // 配色スロット数と揃える
@@ -231,6 +233,7 @@
   function snapshot() {
     return {
       version: 3,
+      schema: SCHEMA,
       settings: state.settings,
       groups: state.groups,
       stations: state.stations,
@@ -244,7 +247,10 @@
     };
   }
   var saveFailed = false;
+  var readOnly = false;   // 新しいバージョンで保存されたデータを壊さないためのロック
+
   function save() {
+    if (readOnly) return;
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify(snapshot()));
       if (saveFailed) { saveFailed = false; updateStorageHint(); }
@@ -260,14 +266,91 @@
     clearTimeout(saveTimer);
     saveTimer = setTimeout(save, 300);
   }
+  /** 保存されているデータが何ステーション分あるか（取りこぼし検知用） */
+  function countUnits(d) {
+    if (Array.isArray(d.stations)) return d.stations.length;
+    if (Array.isArray(d.processes)) return d.processes.length;
+    return 1;
+  }
+
+  /** データの重み（ステーション数と記録サイクル数）。減っていたら退避する判定に使う。 */
+  function dataWeight(d) {
+    var list = Array.isArray(d.stations) ? d.stations
+      : (Array.isArray(d.processes) ? d.processes : []);
+    var cycles = 0;
+    list.forEach(function (p) { if (p && Array.isArray(p.cycles)) cycles += p.cycles.length; });
+    if (!list.length && Array.isArray(d.cycles)) cycles += d.cycles.length;   // v1
+    return countUnits(d) * 1000 + cycles;
+  }
+
+  /** 取り込めなかったデータを「保存した測定」に退避して、あとから戻せるようにする。 */
+  var rescueNotice = '';
+  function keepRescue(raw, why) {
+    var d;
+    try { d = JSON.parse(raw); } catch (e) { return; }
+    rescueNotice = why;
+    var list = loadSessions();
+    if (list.some(function (x) { return x.rescue && JSON.stringify(x.data) === JSON.stringify(d); })) return;
+    list.unshift({
+      id: uid(), auto: true, rescue: true,
+      name: '復元用 ' + fmtDateTime(nowIso()) + '（' + why + '）',
+      savedAt: nowIso(), data: d
+    });
+    saveSessions(trimSessions(list));
+  }
+
   function load() {
     var raw;
     try { raw = localStorage.getItem(STORE_KEY); } catch (e) { return; }
     if (!raw) return;
+    var d;
+    try { d = JSON.parse(raw); } catch (e) { return; }
+    if (!d || !d.settings) return;
+
+    // 自分より新しい形式なら触らない（古い版が新しいデータを潰さないため）
+    if (typeof d.schema === 'number' && d.schema > SCHEMA) {
+      readOnly = true;
+      return;
+    }
+
+    // 壊れたデータでもアプリを起動できるようにし、元データは退避しておく
+    var before = countUnits(d);
+    try {
+      state = normalize(d);
+    } catch (e) {
+      state = defaultState();
+      keepRescue(raw, '読み込みに失敗しました');
+      return;
+    }
+    if (before > state.stations.length) {
+      keepRescue(raw, 'ステーション ' + before + ' 件のうち ' + state.stations.length + ' 件しか読めませんでした');
+    }
+
+    // 前回の控えより中身が減っていたら、古いほうを「保存した測定」に退避する。
+    // 別バージョンのコードに上書きされた場合でも、ここから戻せる。
+    var prevRaw = null;
+    try { prevRaw = localStorage.getItem(PREV_KEY); } catch (e) { /* noop */ }
+    if (prevRaw && prevRaw !== raw) {
+      try {
+        var pd = JSON.parse(prevRaw);
+        if (pd && pd.settings && dataWeight(pd) > dataWeight(d)) {
+          keepRescue(prevRaw, '前回より内容が減っています（ST ' + countUnits(pd) + '→' + countUnits(d) + '）');
+        }
+      } catch (e) { /* 読めない控えは無視 */ }
+    }
+
+    // 読み込み直前の中身を1世代だけ控える（上書き事故からの復帰用）
+    try { localStorage.setItem(PREV_KEY, raw); } catch (e) { /* 容量不足なら諦める */ }
+  }
+
+  function prevSnapshot() {
+    var raw;
+    try { raw = localStorage.getItem(PREV_KEY); } catch (e) { return null; }
+    if (!raw) return null;
     try {
       var d = JSON.parse(raw);
-      if (d && d.settings) state = normalize(d);
-    } catch (e) { /* 壊れたデータは無視 */ }
+      return (d && d.settings) ? d : null;
+    } catch (e) { return null; }
   }
 
   function normCycles(list) {
@@ -307,6 +390,8 @@
 
     var list = Array.isArray(d.stations) ? d.stations
       : (Array.isArray(d.processes) ? d.processes : null);
+    if (list) list = list.filter(function (x) { return x && typeof x === 'object'; });
+    if (list && !list.length) list = null;
     if (!list) {
       // v1: settings.elements + cycles を 1 ステーションとして取り込む
       list = [{
@@ -635,14 +720,51 @@
     });
   }
 
-  function setTab(t) {
+  function setTab(t, dir) {
     if (TABS.indexOf(t) < 0 || state.tab === t) return;
     state.tab = t;
     applyTab();
     renderCharts();          // 隠れている間に幅が変わっているため描き直す
     window.scrollTo(0, 0);
+    if (dir) {
+      var main = document.querySelector('main');
+      main.classList.remove('slide-l', 'slide-r');
+      void main.offsetWidth;                       // アニメーションを再生させる
+      main.classList.add(dir === 'left' ? 'slide-l' : 'slide-r');
+    }
     saveSoon();
   }
+
+  /** 左右スワイプでタブを切り替える（横スクロールする表と入力の上では無効）。 */
+  (function initSwipe() {
+    var x0 = null, y0 = null, blocked = false, swiped = 0;
+
+    document.addEventListener('touchstart', function (e) {
+      if (e.touches.length !== 1) { x0 = null; return; }
+      var t = e.touches[0];
+      x0 = t.clientX; y0 = t.clientY;
+      blocked = !!(e.target.closest &&
+        e.target.closest('.table-wrap, input, select, textarea, .tabs'));
+    }, { passive: true });
+
+    document.addEventListener('touchend', function (e) {
+      var sx = x0; x0 = null;
+      if (sx == null || blocked) return;
+      var t = e.changedTouches[0];
+      var dx = t.clientX - sx, dy = t.clientY - y0;
+      if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 2) return;
+      var i = TABS.indexOf(state.tab);
+      var next = TABS[i + (dx < 0 ? 1 : -1)];
+      if (!next) return;
+      swiped = Date.now();
+      setTab(next, dx < 0 ? 'left' : 'right');
+    }, { passive: true });
+
+    // スワイプの流れでボタンが押されてしまうのを防ぐ
+    document.addEventListener('click', function (e) {
+      if (swiped && Date.now() - swiped < 400) { e.stopPropagation(); e.preventDefault(); }
+    }, true);
+  })();
 
   /* ============================================================== 描画：計測 */
   /** 計測パネルに表示するステーション（工程で絞り込む） */
@@ -1402,7 +1524,8 @@
         var ps = stats(p.cycles.filter(function (c) { return !c.excluded; }).map(totalOf));
         if (ps.n && ps.mean > neckMean) { neckMean = ps.mean; neckName = p.name; }
       });
-      return '<tr><td>' + (s.auto ? '<span class="badge badge--muted">自動</span> ' : '') +
+      return '<tr><td>' + (s.rescue ? '<span class="badge">復元用</span> '
+          : (s.auto ? '<span class="badge badge--muted">自動</span> ' : '')) +
         esc(s.name) + '</td><td>' + fmtDateTime(s.savedAt) + '</td>' +
         '<td class="num">' + st.groups.length + '</td><td class="num">' + st.stations.length + '</td>' +
         '<td class="num">' + total + '</td>' +
@@ -1413,6 +1536,35 @@
     }).join('');
     t.innerHTML = head + '<tbody>' + body + '</tbody>';
     updateStorageHint();
+  }
+
+  /** 上部の警告バー（新しい形式のデータ・データ減少を検出したときなど） */
+  function renderAlert() {
+    var bar = $('alertbar');
+    if (rescueNotice) {
+      bar.hidden = false;
+      bar.dataset.kind = 'info';
+      $('alertbar-text').textContent = '前回より内容が減っていたため、古いデータを「保存した測定」に' +
+        '退避しました（' + rescueNotice + '）。設定タブの一覧から戻せます。';
+      $('alertbar-action').textContent = '設定を開く';
+      $('alertbar-action').onclick = function () {
+        rescueNotice = '';
+        setTab('settings');
+        renderAlert();
+      };
+      return;
+    }
+    bar.dataset.kind = 'warn';
+    if (readOnly) {
+      bar.hidden = false;
+      $('alertbar-text').textContent =
+        'このブラウザには、より新しいバージョンで保存されたデータがあります。' +
+        'そのままだと壊してしまうため、書き込みを止めています。ページを再読み込みしてください。';
+      $('alertbar-action').textContent = '再読み込み';
+      $('alertbar-action').onclick = function () { location.reload(true); };
+      return;
+    }
+    bar.hidden = true;
   }
 
   function syncSettingsInputs() {
@@ -1429,6 +1581,7 @@
     renderTables();
     renderProcList();
     renderCharts();
+    renderAlert();
     applyTab();
   }
 

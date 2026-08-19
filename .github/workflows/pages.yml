@@ -37,6 +37,12 @@ jobs:
           cp -r assets icons _site/
           cp dist/ct-checker.html _site/download/
           touch _site/.nojekyll
+          # HTML と JS/CSS の版がずれると、古いコードが新しいデータを壊しうる。
+          # コミット SHA を URL とキャッシュ名に埋めて、必ず同じ版が組で読まれるようにする。
+          SHA="${GITHUB_SHA::7}"
+          sed -i "s#assets/styles.css#assets/styles.css?v=$SHA#g; s#assets/app.js#assets/app.js?v=$SHA#g" _site/index.html
+          sed -i "s#ct-checker-v5#ct-checker-$SHA#; s#./assets/styles.css#./assets/styles.css?v=$SHA#; s#./assets/app.js#./assets/app.js?v=$SHA#" _site/sw.js
+          grep -n "assets/" _site/index.html
           ls -R _site | head -40
 
       - name: gh-pages ブランチへ公開
