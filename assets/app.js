@@ -81,7 +81,9 @@
     return {
       id: uid(), name: name || '工程1',
       elements: [{ id: uid(), name: '1サイクル' }],
-      cycles: [], cycleStart: 0, pending: []
+      cycles: [], cycleStart: 0, pending: [],
+      accBase: 0,      // この工程のストップウォッチの累積(ms)
+      started: false   // 一度でも開始したか
     };
   }
 
@@ -97,14 +99,21 @@
   }
 
   var state = defaultState();
-  var runSince = null;             // 実行中のみ performance.now()
+  var RUN = {};                    // 工程ID → 実行中の performance.now()。保存しない
   var lastTickAt = -1;
 
   function procs() { return state.processes; }
   function multi() { return state.processes.length > 1; }
-  function running() { return runSince !== null; }
+  /** 工程ごとのストップウォッチ。工程は互いに独立して動く。 */
+  function pRunning(p) { return RUN[p.id] != null; }
+  function pElapsed(p) {
+    return p.accBase + (RUN[p.id] != null ? performance.now() - RUN[p.id] : 0);
+  }
+  function anyRunning() { return procs().some(pRunning); }
+  function anyStarted() { return procs().some(function (p) { return p.started; }); }
+  /** 観測全体の経過＝もっとも長く動いた工程の経過。 */
   function elapsed() {
-    return state.accBase + (runSince !== null ? performance.now() - runSince : 0);
+    return procs().reduce(function (m, p) { return Math.max(m, pElapsed(p)); }, 0);
   }
 
   /** 集計・グラフ・明細の表示対象。単一工程なら常にその工程。 */
@@ -118,10 +127,10 @@
 
   function pElements(p) { return p.elements; }
   function pElemCount(p) { return Math.max(1, p.elements.length); }
-  function pCycleElapsed(p) { return elapsed() - p.cycleStart; }
+  function pCycleElapsed(p) { return pElapsed(p) - p.cycleStart; }
   function pElementElapsed(p) {
     var base = p.pending.length ? p.pending[p.pending.length - 1] : p.cycleStart;
-    return elapsed() - base;
+    return pElapsed(p) - base;
   }
   function totalOf(c) { return c.marks[c.marks.length - 1] - c.startAcc; }
   function durationsOf(c) {
@@ -189,7 +198,7 @@
       settings: state.settings,
       processes: state.processes,
       accBase: elapsed(),
-      started: state.started,
+      started: anyStarted(),
       startedAt: state.startedAt,
       view: state.view
     };
@@ -247,14 +256,20 @@
         cycleStart: d.cycleStart, pending: d.pending
       }];
     }
+    // 旧データは共通の時計だったので、その値を各工程の時計の初期値として引き継ぐ
+    var sharedAcc = typeof d.accBase === 'number' ? d.accBase : 0;
     s.processes = list.slice(0, MAX_PROCESSES).map(function (p, i) {
+      var cycles = normCycles(p.cycles);
+      var pending = Array.isArray(p.pending) ? p.pending.slice() : [];
       return {
         id: p.id || uid(),
         name: String(p.name || ('工程' + (i + 1))),
         elements: normElements(p.elements),
-        cycles: normCycles(p.cycles),
+        cycles: cycles,
         cycleStart: typeof p.cycleStart === 'number' ? p.cycleStart : 0,
-        pending: Array.isArray(p.pending) ? p.pending.slice() : []
+        pending: pending,
+        accBase: typeof p.accBase === 'number' ? p.accBase : sharedAcc,
+        started: typeof p.started === 'boolean' ? p.started : (!!d.started || cycles.length > 0)
       };
     });
     if (!s.processes.length) s.processes = [newProcess('工程1')];
@@ -276,22 +291,59 @@
   }
 
   /* ------------------------------------------------------------ 計測アクション */
-  function startMeasure() {
-    state.started = true;
-    state.startedAt = nowIso();
-    state.accBase = 0;
-    procs().forEach(function (p) { p.cycleStart = 0; p.pending = []; });
-    runSince = performance.now();
+  /** 工程 p のストップウォッチを開始する（他の工程には影響しない）。 */
+  function startProc(p) {
+    if (pRunning(p)) return;
+    if (!p.started) {
+      p.started = true;
+      p.accBase = 0;
+      p.cycleStart = 0;
+      p.pending = [];
+      if (!state.startedAt) state.startedAt = nowIso();
+    }
+    RUN[p.id] = performance.now();
     requestWakeLock();
-    announce(multi() ? '計測を開始しました。各工程のボタンを押してください。' : '計測を開始しました。');
+  }
+
+  /** 工程 p のストップウォッチを止める。止めている間の時間は加算されない。 */
+  function stopProc(p) {
+    if (!pRunning(p)) return;
+    p.accBase = pElapsed(p);
+    delete RUN[p.id];
+    if (!anyRunning()) releaseWakeLock();
+  }
+
+  function startAll() {
+    procs().forEach(startProc);
+    announce(multi() ? '全工程の計測を開始しました。' : '計測を開始しました。');
+    render(); save();
+  }
+
+  function stopAll() {
+    procs().forEach(stopProc);
+    announce('一時停止中。再開すると現在のサイクルの続きから計測します。');
+    render(); save();
+  }
+
+  function toggleProc(p) {
+    if (pRunning(p)) {
+      stopProc(p);
+      announce((multi() ? p.name + '：' : '') + '一時停止しました。');
+    } else {
+      startProc(p);
+      announce((multi() ? p.name + '：' : '') + (p.cycles.length || p.pending.length ? '再開しました。' : '計測を開始しました。'));
+    }
+    render(); save();
   }
 
   /** 工程 p のラップ。未開始なら計測開始、一時停止中なら再開。 */
   function lap(p) {
-    if (!state.started) { startMeasure(); }
-    else if (!running()) { resume(); return; }
-    else {
-      var t = elapsed();
+    if (!pRunning(p)) {
+      // 止まっている工程はまず動かす（開始・再開ボタンを兼ねる）
+      startProc(p);
+      announce((multi() ? p.name + '：' : '') + (p.started && p.cycles.length ? '再開しました。' : '計測を開始しました。'));
+    } else {
+      var t = pElapsed(p);
       p.pending.push(t);
       if (p.pending.length >= pElemCount(p)) {
         p.cycles.push({
@@ -315,23 +367,10 @@
     save();
   }
 
-  function pause() {
-    if (!running()) return;
-    state.accBase = elapsed();
-    runSince = null;
-    releaseWakeLock();
-    announce('一時停止中。再開すると現在のサイクルの続きから計測します。');
-    render();
-    save();
-  }
-
-  function resume() {
-    if (running() || !state.started) return;
-    runSince = performance.now();
-    requestWakeLock();
-    announce('計測を再開しました。');
-    render();
-    save();
+  /** 画面下の共通ボタン：全工程をまとめて開始 / 一時停止 / 再開する。 */
+  function toggleAll() {
+    if (anyRunning()) stopAll();
+    else startAll();
   }
 
   function undo(p) {
@@ -351,9 +390,9 @@
   }
 
   function discardCycle(p) {
-    if (!state.started) return;
+    if (!p.started) return;
     p.pending = [];
-    p.cycleStart = elapsed();
+    p.cycleStart = pElapsed(p);
     announce((multi() ? p.name + '：' : '') + '現在のサイクルを破棄しました。ここから測り直します。');
     render();
     save();
@@ -365,11 +404,12 @@
 
   function resetAll() {
     if (hasData() && !confirm('計測データをすべて消去します。よろしいですか？\n（「現在の測定を保存」で残せます）')) return;
-    state.started = false;
     state.startedAt = null;
     state.accBase = 0;
-    procs().forEach(function (p) { p.cycles = []; p.pending = []; p.cycleStart = 0; });
-    runSince = null;
+    procs().forEach(function (p) {
+      p.cycles = []; p.pending = []; p.cycleStart = 0; p.accBase = 0; p.started = false;
+    });
+    RUN = {};
     releaseWakeLock();
     announce('リセットしました。');
     render();
@@ -386,7 +426,7 @@
     if (wakeLock) { try { wakeLock.release(); } catch (e) { /* noop */ } wakeLock = null; }
   }
   document.addEventListener('visibilitychange', function () {
-    if (document.visibilityState === 'visible' && running()) requestWakeLock();
+    if (document.visibilityState === 'visible' && anyRunning()) requestWakeLock();
     if (document.visibilityState === 'hidden') save();
   });
 
@@ -397,13 +437,13 @@
       $('multi-total').textContent = fmtTime(elapsed());
       procs().forEach(function (p, i) {
         var el = $('ptime-' + i);
-        if (el) el.firstChild.nodeValue = state.started ? fmtTime(pCycleElapsed(p)) : '0.00';
+        if (el) el.firstChild.nodeValue = p.started ? fmtTime(pCycleElapsed(p)) : '0.00';
       });
       return;
     }
     var p0 = procs()[0];
-    $('readout-cycle').textContent = state.started ? fmtTime(pCycleElapsed(p0)) : '0.00';
-    $('readout-elem').textContent = state.started ? fmtTime(pElementElapsed(p0)) : '0.00';
+    $('readout-cycle').textContent = p0.started ? fmtTime(pCycleElapsed(p0)) : '0.00';
+    $('readout-elem').textContent = p0.started ? fmtTime(pElementElapsed(p0)) : '0.00';
     $('readout-total').textContent = fmtTime(elapsed());
   }
 
@@ -420,7 +460,7 @@
     var p = procs()[0];
     var els = pElements(p);
     var idx = Math.min(p.pending.length, els.length - 1);
-    $('readout-elem-name').textContent = state.started ? els[idx].name : '—';
+    $('readout-elem-name').textContent = p.started ? els[idx].name : '—';
     $('readout-count').textContent = String(p.cycles.length);
 
     var last = p.cycles.length ? p.cycles[p.cycles.length - 1] : null;
@@ -459,11 +499,11 @@
       host.hidden = false;
       host.innerHTML = els.map(function (el, i) {
         var cls = 'step', time = '';
-        if (state.started && i < p.pending.length) {
+        if (p.started && i < p.pending.length) {
           cls += ' step--done';
           var prev = i ? p.pending[i - 1] : p.cycleStart;
           time = '<span class="step__time">' + fmtTime(p.pending[i] - prev) + '</span>';
-        } else if (state.started && i === p.pending.length) {
+        } else if (p.started && i === p.pending.length) {
           cls += ' step--current';
         }
         return '<span class="' + cls + '" role="listitem">' +
@@ -474,11 +514,11 @@
 
     // 大ボタン
     var main = $('lap-btn-main'), sub = $('lap-btn-sub'), btn = $('btn-lap');
-    if (!state.started) {
+    if (!p.started) {
       main.textContent = '計測開始';
       sub.textContent = 'Space キーでも操作できます';
       btn.dataset.paused = 'false';
-    } else if (!running()) {
+    } else if (!pRunning(p)) {
       main.textContent = '再開';
       sub.textContent = '一時停止中';
       btn.dataset.paused = 'true';
@@ -502,9 +542,10 @@
       var st = pStats(p);
       var els = pElements(p);
       var last = p.cycles.length ? totalOf(p.cycles[p.cycles.length - 1]) : null;
+      var run = pRunning(p);
       var label;
-      if (!state.started) label = '計測開始';
-      else if (!running()) label = '再開';
+      if (!p.started) label = '▶ 計測開始';
+      else if (!run) label = '▶ 再開';
       else if (els.length < 2) label = 'サイクル完了';
       else label = els[Math.min(p.pending.length, els.length - 1)].name + '完了';
 
@@ -512,48 +553,61 @@
       if (neck === p && st.n) badges += '<span class="badge">ネック</span>';
       if (tt && st.n && st.mean > tt) badges += '<span class="badge badge--muted">TT超過</span>';
 
-      var elemLine = '';
-      if (els.length > 1) {
-        elemLine = '<div class="pcard__elem">' +
-          (state.started ? (p.pending.length + 1) + '/' + els.length + '　' +
-            esc(els[Math.min(p.pending.length, els.length - 1)].name) : '要素 ' + els.length + ' 個') +
-          '</div>';
-      }
+      var runState = run
+        ? '<span class="pcard__run pcard__run--on">計測中</span>'
+        : '<span class="pcard__run">' + (p.started ? '停止中' : '未計測') + '</span>';
+
+      var elemLine = '<div class="pcard__elem">' + (els.length > 1
+        ? (p.started ? '現在のサイクル　' + (p.pending.length + 1) + '/' + els.length + '　' +
+            esc(els[Math.min(p.pending.length, els.length - 1)].name)
+          : '要素 ' + els.length + ' 個')
+        : '現在のサイクルの経過') + '</div>';
 
       return '<div class="pcard" data-i="' + i + '" data-neck="' + (neck === p && st.n ? 'true' : 'false') +
-        '" style="--pc:' + seriesVar(i) + '">' +
+        '" data-run="' + (run ? 'true' : 'false') + '" style="--pc:' + seriesVar(i) + '">' +
         '<div class="pcard__head">' +
-          '<span class="pcard__name">' + esc(p.name) + '</span>' + badges +
+          '<span class="pcard__name">' + esc(p.name) + '</span>' + runState + badges +
           '<span class="pcard__key">' + (i + 1) + '</span>' +
         '</div>' +
         '<div class="pcard__time" id="ptime-' + i + '">0.00<small>秒</small></div>' +
         elemLine +
         '<button type="button" class="pcard__btn" data-act="lap" data-i="' + i + '"' +
-          (state.started && running() ? '' : ' data-idle="true"') + '>' + esc(label) + '</button>' +
+          (run ? '' : ' data-idle="true"') + '>' + esc(label) + '</button>' +
         '<div class="pcard__foot">' +
           '<span class="pcard__stat">' + st.n + ' 回</span>' +
           '<span class="pcard__stat">直前 <b>' + (last == null ? '—' : fmtTime(last)) + '</b></span>' +
           '<span class="pcard__stat">平均 <b>' + (st.n ? fmtTime(st.mean) : '—') + '</b></span>' +
-          '<button type="button" class="btn btn--sm" data-act="undo" data-i="' + i + '">取消</button>' +
-          '<button type="button" class="btn btn--sm" data-act="discard" data-i="' + i + '">破棄</button>' +
+        '</div>' +
+        '<div class="pcard__actions">' +
+          '<button type="button" class="btn btn--sm" data-act="toggle" data-i="' + i + '"' +
+            (run ? '' : ' disabled') + '>停止</button>' +
+          '<button type="button" class="btn btn--sm" data-act="undo" data-i="' + i + '"' +
+            (p.cycles.length || p.pending.length ? '' : ' disabled') + '>取消</button>' +
+          '<button type="button" class="btn btn--sm" data-act="discard" data-i="' + i + '"' +
+            (p.started ? '' : ' disabled') + '>破棄</button>' +
         '</div>' +
       '</div>';
     }).join('');
     $('pcards').innerHTML = html;
-    $('multi-hint').textContent = state.started
-      ? '各工程のボタン（またはキーボードの数字）を、その工程が1サイクル終わるたびに押してください。'
-      : 'どれかのボタンを押すと全工程の時計が同時に動きだします。';
+    var runN = procs().filter(pRunning).length;
+    $('multi-hint').textContent = anyStarted()
+      ? '各工程のボタン（またはキーボードの数字）を、その工程が1サイクル終わるたびに押してください。' +
+        '（計測中 ' + runN + ' / ' + procs().length + ' 工程）'
+      : '工程ごとに独立したストップウォッチです。1工程ずつ開始しても、下の「全工程を開始」でまとめて動かしても構いません。';
   }
 
   function renderControls() {
     var p0 = procs()[0];
-    $('btn-pause').disabled = !state.started;
-    $('btn-pause').textContent = (state.started && !running()) ? '再開' : '一時停止';
+    var run = anyRunning();
+    var btn = $('btn-pause');
+    btn.disabled = false;
+    if (multi()) btn.textContent = run ? '全工程を一時停止' : (anyStarted() ? '全工程を再開' : '全工程を開始');
+    else btn.textContent = run ? '一時停止' : (p0.started ? '再開' : '計測開始');
     $('btn-undo').hidden = multi();
     $('btn-discard').hidden = multi();
     $('btn-undo').disabled = !(p0.pending.length || p0.cycles.length);
-    $('btn-discard').disabled = !state.started;
-    $('btn-reset').disabled = !state.started && !hasData();
+    $('btn-discard').disabled = !p0.started;
+    $('btn-reset').disabled = !anyStarted() && !hasData();
     $('controls').style.gridTemplateColumns = multi() ? 'repeat(2, minmax(0, 1fr))' : '';
   }
 
@@ -829,7 +883,7 @@
 
   /* ========================================================== 描画：設定・保存 */
   function renderProcList() {
-    var locked = state.started || hasData();
+    var locked = anyStarted() || hasData();
     var list = procs();
     $('proc-list').innerHTML = list.map(function (p, i) {
       var els = pElements(p);
@@ -1616,7 +1670,7 @@
     return '﻿' + lines.join('\r\n') + '\r\n';
   }
 
-  function download(filename, text, mime) {
+  function anchorDownload(filename, text, mime) {
     var blob = new Blob([text], { type: mime + ';charset=utf-8' });
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
@@ -1626,6 +1680,34 @@
     a.click();
     document.body.removeChild(a);
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    toast('書き出しました');
+  }
+
+  /**
+   * ファイルの書き出し。通常のブラウザではリンク経由、共有ページ（Artifact）では
+   * ホストの保存 API を通す（そちらでは a[download] が無効なため）。
+   */
+  function download(filename, text, mime) {
+    var host = (typeof window.claude !== 'undefined' && window.claude &&
+      typeof window.claude.use === 'function') ? window.claude : null;
+    if (!host) { anchorDownload(filename, text, mime); return; }
+
+    host.use('downloads').then(function (dl) {
+      if (!dl) { anchorDownload(filename, text, mime); return; }
+      return dl.save({ filename: filename, data: text })
+        .then(function () { toast('保存しました'); })
+        .catch(function (e) {
+          var code = e && e.code;
+          if (code === 'declined') return;
+          if (code === 'extension_not_enabled' && /\.csv$/.test(filename)) {
+            // この環境では .csv を直接保存できないので拡張子だけ変えて渡す
+            return dl.save({ filename: filename.replace(/\.csv$/, '.txt'), data: text })
+              .then(function () { toast('CSVを .txt で保存しました（拡張子を .csv に変えるとExcelで開けます）'); })
+              .catch(function () { toast('保存できませんでした'); });
+          }
+          toast('保存できませんでした（' + (code || 'error') + '）');
+        });
+    }, function () { anchorDownload(filename, text, mime); });
   }
 
   function safeName(s) { return String(s || '').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40); }
@@ -1642,7 +1724,6 @@
     if (!has) { toast('計測データがありません'); return; }
     if (scopeProc) download(fileBase(settings, scopeProc.name) + '.csv', buildCsvProc(settings, scopeProc), 'text/csv');
     else download(fileBase(settings, 'line') + '.csv', buildCsvLine(settings, list), 'text/csv');
-    toast('CSVを書き出しました');
   }
 
   function exportJson() {
@@ -1650,7 +1731,6 @@
     var snap = snapshot();
     for (var k in snap) payload[k] = snap[k];
     download(fileBase(state.settings) + '.json', JSON.stringify(payload, null, 2), 'application/json');
-    toast('JSONを書き出しました');
   }
 
   function importJson(file) {
@@ -1661,7 +1741,7 @@
       if (!d || !d.settings) { toast('CT Checker の JSON ではありません'); return; }
       if (hasData() && !confirm('現在の計測データを破棄して読み込みます。よろしいですか？')) return;
       state = normalize(d);
-      runSince = null;
+      RUN = {};
       syncSettingsInputs();
       render();
       save();
@@ -1691,8 +1771,7 @@
     if (!s) return;
     if (hasData() && !confirm('現在の計測データを破棄して「' + s.name + '」を読み込みます。よろしいですか？')) return;
     state = normalize(s.data || s);
-    state.started = true;
-    runSince = null;
+    RUN = {};
     syncSettingsInputs();
     render();
     save();
@@ -1703,7 +1782,7 @@
   /* ------------------------------------------------------------------ イベント */
   function bind() {
     $('btn-lap').addEventListener('click', function () { lap(procs()[0]); });
-    $('btn-pause').addEventListener('click', function () { running() ? pause() : resume(); });
+    $('btn-pause').addEventListener('click', toggleAll);
     $('btn-undo').addEventListener('click', function () { undo(procs()[0]); });
     $('btn-discard').addEventListener('click', function () { discardCycle(procs()[0]); });
     $('btn-reset').addEventListener('click', resetAll);
@@ -1715,6 +1794,7 @@
       if (!p) return;
       var act = b.getAttribute('data-act');
       if (act === 'lap') lap(p);
+      else if (act === 'toggle') toggleProc(p);
       else if (act === 'undo') undo(p);
       else if (act === 'discard') discardCycle(p);
     });
@@ -1728,7 +1808,7 @@
         var p = procs()[+e.key - 1];
         if (p) { e.preventDefault(); lap(p); }
       }
-      else if (e.key === 'p' || e.key === 'P') { e.preventDefault(); running() ? pause() : resume(); }
+      else if (e.key === 'p' || e.key === 'P') { e.preventDefault(); toggleAll(); }
       else if (e.key === 'z' || e.key === 'Z') { e.preventDefault(); undo(procs()[0]); }
     });
 
@@ -1915,9 +1995,10 @@
 
   /* -------------------------------------------------------------------- 起動 */
   function tick() {
-    if (running()) {
-      var e = elapsed();
-      if (e - lastTickAt >= 50 || e < lastTickAt) { lastTickAt = e; renderReadout(); }
+    // 実時間で間引く。工程ごとに時計が止まるため、経過値では判定できない
+    if (anyRunning()) {
+      var now = performance.now();
+      if (now - lastTickAt >= 50) { lastTickAt = now; renderReadout(); }
     }
     requestAnimationFrame(tick);
   }
@@ -1928,6 +2009,15 @@
     if (t === 'dark' || t === 'light') document.documentElement.setAttribute('data-theme', t);
   }
 
+  /** localStorage が使えるか（共有ページやプライベートモードでは使えないことがある） */
+  function storageOk() {
+    try {
+      localStorage.setItem('ct-checker:probe', '1');
+      localStorage.removeItem('ct-checker:probe');
+      return true;
+    } catch (e) { return false; }
+  }
+
   function init() {
     initTheme();
     load();
@@ -1935,8 +2025,13 @@
     bind();
     render();
     renderSessions();
-    if (state.started) announce('前回のデータを復元しました（一時停止中）。「再開」で続きから計測できます。');
-    setInterval(function () { if (running()) save(); }, 5000);
+    if (!storageOk()) {
+      document.querySelector('.app-foot p').textContent =
+        'この環境ではブラウザへの自動保存が使えません。計測結果はページを閉じると消えるため、' +
+        '必要なら CSV / JSON で書き出してください。';
+    }
+    if (anyStarted()) announce('前回のデータを復元しました（停止中）。「再開」で続きから計測できます。');
+    setInterval(function () { if (anyRunning()) save(); }, 5000);
     requestAnimationFrame(tick);
   }
 

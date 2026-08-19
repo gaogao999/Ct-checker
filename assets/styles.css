@@ -460,6 +460,7 @@ main > *, .panel, .figure, .figure-grid > *, .readout > *, .table-wrap { min-wid
 }
 .pcard {
   display: grid; gap: 8px; padding: 12px;
+  grid-template-rows: auto auto auto 1fr auto auto;
   border: 1px solid var(--border); border-radius: var(--radius);
   background: var(--surface-1);
   border-left: 4px solid var(--pc, var(--series-1));
@@ -500,8 +501,8 @@ main > *, .panel, .figure, .figure-grid > *, .readout > *, .table-wrap { min-wid
 }
 .pcard__stat { font-variant-numeric: tabular-nums; }
 .pcard__stat b { color: var(--text-primary); font-weight: 650; }
-.pcard__foot .btn { margin-left: auto; }
-.pcard__foot .btn + .btn { margin-left: 0; }
+.pcard__actions { display: flex; gap: 6px; }
+.pcard__actions .btn { flex: 1; padding: 7px 4px; }
 .pcard__over { color: var(--critical); font-weight: 650; }
 
 /* ---------- 表示切替 ---------- */
@@ -546,3 +547,16 @@ main > *, .panel, .figure, .figure-grid > *, .readout > *, .table-wrap { min-wid
   .pcard__btn { min-height: 62px; font-size: 16px; }
   .pcard__time { font-size: 30px; }
 }
+
+/* 工程カードの稼働状態 */
+.pcard__run {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; color: var(--text-muted);
+}
+.pcard__run::before {
+  content: ''; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--text-muted); flex: none;
+}
+.pcard__run--on { color: var(--success-text); font-weight: 650; }
+.pcard__run--on::before { background: var(--good); }
+.pcard[data-run="true"] { background: color-mix(in srgb, var(--pc) 5%, var(--surface-1)); }
