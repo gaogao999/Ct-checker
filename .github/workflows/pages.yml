@@ -41,6 +41,7 @@ jobs:
           # コミット SHA を URL とキャッシュ名に埋めて、必ず同じ版が組で読まれるようにする。
           SHA="${GITHUB_SHA::7}"
           sed -i "s#assets/styles.css#assets/styles.css?v=$SHA#g; s#assets/app.js#assets/app.js?v=$SHA#g" _site/index.html
+          sed -i "s#<meta name=\"build\" content=\"dev\">#<meta name=\"build\" content=\"$SHA\">#" _site/index.html
           sed -i "s#ct-checker-v5#ct-checker-$SHA#; s#./assets/styles.css#./assets/styles.css?v=$SHA#; s#./assets/app.js#./assets/app.js?v=$SHA#" _site/sw.js
           grep -n "assets/" _site/index.html
           ls -R _site | head -40

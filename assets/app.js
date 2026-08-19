@@ -2559,17 +2559,32 @@
     download(fileBase(state.settings) + '.json', JSON.stringify(payload, null, 2), 'application/json');
   }
 
-  /**
-   * ?preset=... で同じサイト内の構成ファイルを読み込む。
-   * 現場に「このリンクを開くだけ」で構成を配れるようにするため。
-   */
-  function loadPresetFromQuery() {
-    var m = /[?&]preset=([^&]+)/.exec(location.search);
-    if (!m) return;
-    var url;
-    try { url = new URL(decodeURIComponent(m[1]), location.href); } catch (e) { return; }
-    if (url.origin !== location.origin) { toast('同じサイト内のファイルだけ読み込めます'); return; }
-    fetch(url.href).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+  /** 用意された構成の一覧を出す（presets/index.json があるときだけ）。 */
+  function renderPresets() {
+    var block = $('preset-block');
+    if (!block) return;
+    fetch('presets/index.json', { cache: 'no-cache' }).then(function (r) {
+      return r.ok ? r.json() : null;
+    }).then(function (d) {
+      var list = d && Array.isArray(d.presets) ? d.presets : [];
+      if (!list.length) { block.hidden = true; return; }
+      block.hidden = false;
+      $('preset-list').innerHTML = list.map(function (x) {
+        return '<div class="preset">' +
+          '<div class="preset__body"><span class="preset__name">' + esc(x.name) + '</span>' +
+          (x.note ? '<span class="preset__note">' + esc(x.note) + '</span>' : '') + '</div>' +
+          '<button type="button" class="btn btn--primary" data-act="use-preset" data-file="' +
+            esc(x.file) + '">読み込む</button>' +
+        '</div>';
+      }).join('');
+    }).catch(function () { block.hidden = true; });
+  }
+
+  /** 構成ファイルを取り込む。取り込み前に必ずバックアップを取る。 */
+  function applyPreset(url, quiet) {
+    fetch(url, { cache: 'no-cache' }).then(function (r) {
+      return r.ok ? r.json() : null;
+    }).then(function (d) {
       if (!d || !d.settings) { toast('構成ファイルを読み込めませんでした'); return; }
       var msg = '構成を読み込みます（工程 ' + (d.groups ? d.groups.length : 1) +
         '・ステーション ' + countUnits(d) + '）。よろしいですか？';
@@ -2581,9 +2596,23 @@
       syncSettingsInputs();
       render();
       save();
-      try { history.replaceState(null, '', location.pathname); } catch (e) { /* noop */ }
+      if (quiet) { try { history.replaceState(null, '', location.pathname); } catch (e) { /* noop */ } }
+      announce('構成を読み込みました（工程 ' + groups().length + '・ステーション ' + stations().length + '）。');
       toast('構成を読み込みました');
-    }).catch(function () { toast('構成ファイルを読み込めませんでした'); });
+    }).catch(function () { toast('構成ファイルを読み込めませんでした（通信を確認してください）'); });
+  }
+
+  /**
+   * ?preset=... で同じサイト内の構成ファイルを読み込む。
+   * 現場に「このリンクを開くだけ」で構成を配れるようにするため。
+   */
+  function loadPresetFromQuery() {
+    var m = /[?&]preset=([^&]+)/.exec(location.search);
+    if (!m) return;
+    var url;
+    try { url = new URL(decodeURIComponent(m[1]), location.href); } catch (e) { return; }
+    if (url.origin !== location.origin) { toast('同じサイト内のファイルだけ読み込めます'); return; }
+    applyPreset(url.href, true);
   }
 
   function importJson(file) {
@@ -2845,6 +2874,11 @@
     });
 
     // 保存測定
+    $('preset-list').addEventListener('click', function (e) {
+      var b = e.target.closest('[data-act="use-preset"]');
+      if (b) applyPreset('presets/' + b.getAttribute('data-file'), false);
+    });
+
     $('btn-save-session').addEventListener('click', saveSession);
     $('table-sessions').addEventListener('click', function (e) {
       var b = e.target.closest('[data-act]');
@@ -2974,6 +3008,13 @@
     } catch (e) { /* noop */ }
   }
 
+  /** どの版が動いているかを設定タブに出す（更新が届いたかの確認用）。 */
+  function renderBuildId() {
+    var m = document.querySelector('meta[name="build"]');
+    var el = $('build-id');
+    if (el) el.textContent = (m && m.content) || 'dev';
+  }
+
   function init() {
     initTheme();
     load();
@@ -2981,6 +3022,8 @@
     bind();
     render();
     renderSessions();
+    renderPresets();
+    renderBuildId();
     requestPersist();
     updateStorageHint();
     if (!storageOk()) {

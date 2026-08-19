@@ -1,0 +1,9 @@
+{
+  "presets": [
+    {
+      "file": "assy-line.json",
+      "name": "Assy1〜Assy9 / Station1〜11",
+      "note": "工程9・ステーション11（計測データなし）"
+    }
+  ]
+}

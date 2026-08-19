@@ -8,6 +8,7 @@
 <title>CT Checker – サイクルタイム測定</title>
 <meta name="theme-color" content="#fcfcfb" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#1a1a19" media="(prefers-color-scheme: dark)">
+<meta name="build" content="dev">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -317,6 +318,14 @@
         <button type="button" id="btn-add-proc" class="btn">＋ 工程を追加</button>
       </div>
     </div>
+
+    <div class="elements" id="preset-block" hidden>
+      <div class="elements__head">
+        <h3>用意された構成を読み込む</h3>
+        <p class="hint">選ぶだけで工程とステーションが入ります（いまのデータは自動バックアップしてから入れ替えます）。</p>
+      </div>
+      <div id="preset-list"></div>
+    </div>
   </section>
 
   <!-- ============ 保存データ ============ -->
@@ -338,6 +347,7 @@
 
 <footer class="app-foot" data-tab-panel="settings">
   <p>データはこのブラウザ内（localStorage）にのみ保存されます。端末を変えるときは JSON で書き出してください。</p>
+  <p class="app-foot__ver">バージョン <span id="build-id">dev</span></p>
 </footer>
 
 <div class="tooltip" id="tooltip" role="tooltip" aria-hidden="true"></div>
