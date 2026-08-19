@@ -279,7 +279,15 @@
       schema: SCHEMA,
       settings: state.settings,
       groups: state.groups,
-      stations: state.stations,
+      // 計測中のステーションは「いまの経過」を書き出す。
+      // そのまま保存すると、閉じたときに走っていた分が失われるため。
+      stations: state.stations.map(function (p) {
+        if (!pRunning(p)) return p;
+        var copy = {};
+        for (var k in p) if (Object.prototype.hasOwnProperty.call(p, k)) copy[k] = p[k];
+        copy.accBase = pElapsed(p);
+        return copy;
+      }),
       accBase: elapsed(),
       started: anyStarted(),
       startedAt: state.startedAt,
