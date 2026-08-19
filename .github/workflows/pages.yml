@@ -5,8 +5,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# 公開方法（Settings → Pages → Source）がどちらでも届くように両方に配る:
+#   1. gh-pages ブランチ（Deploy from a branch）
+#   2. Pages アーティファクト（GitHub Actions）
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -33,9 +36,23 @@ jobs:
           cp index.html manifest.webmanifest sw.js _site/
           cp -r assets icons _site/
           cp dist/ct-checker.html _site/download/
+          touch _site/.nojekyll
           ls -R _site | head -40
 
+      - name: gh-pages ブランチへ公開
+        run: |
+          cd _site
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "Deploy ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${GH_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:gh-pages
+        env:
+          GH_PUSH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: actions/configure-pages@v5
+        continue-on-error: true
         with:
           enablement: true
 
@@ -43,9 +60,12 @@ jobs:
         with:
           path: _site
 
+  # Pages の Source が「GitHub Actions」のときだけ成功する。
+  # 「Deploy from a branch」運用なら失敗しても構わないので全体は赤にしない。
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    continue-on-error: true
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
