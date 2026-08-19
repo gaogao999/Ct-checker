@@ -939,9 +939,10 @@
     $('view-groups').innerHTML = rows.join('');
 
     var sub = $('view-stations');
-    if (!g) { sub.innerHTML = ''; sub.hidden = true; }
+    var subRow = $('view-stations-row');
+    if (!g) { sub.innerHTML = ''; subRow.hidden = true; }
     else {
-      sub.hidden = false;
+      subRow.hidden = false;
       var list = stationsOf(g);
       var chips = ['<button type="button" class="chip chip--sub" data-view="g:' + esc(g.id) +
         '" aria-selected="' + (lv === 'group') + '">' + esc(g.name) + ' 全体</button>'];
