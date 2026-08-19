@@ -145,7 +145,15 @@ button, input { font: inherit; color: inherit; }
 .app-bar__title { display: flex; align-items: center; gap: 10px; }
 .app-bar__mark { font-size: 22px; }
 .app-bar__title strong { display: block; font-size: 16px; letter-spacing: .02em; }
-.app-bar__title small { display: block; font-size: 12px; color: var(--text-secondary); line-height: 1.2; }
+.app-bar__title small {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--text-secondary); line-height: 1.2;
+}
+.rev {
+  font-size: 10.5px; font-variant-numeric: tabular-nums; letter-spacing: .02em;
+  color: var(--text-muted); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0 4px; white-space: nowrap;
+}
 .app-bar__actions { display: flex; gap: 8px; }
 
 /* ---------- 使い方 ---------- */
@@ -733,7 +741,7 @@ main > *, .panel, .panel--measure > *, .figure, .figure-grid > *, .readout > *, 
   .tab svg { width: 21px; height: 21px; }
   .tab__badge { position: absolute; top: 2px; right: 22%; }
   .app-bar { padding-top: max(8px, env(safe-area-inset-top)); padding-bottom: 8px; }
-  .app-bar__title small { display: none; }
+  .app-bar__sub { display: none; }
   main { padding-top: 10px; gap: 12px; }
   .panel { padding: 12px; border-radius: 10px; }
   .multi-head { margin-bottom: 8px; }

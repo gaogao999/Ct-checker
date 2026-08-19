@@ -3165,8 +3165,11 @@
   /** どの版が動いているかを設定タブに出す（更新が届いたかの確認用）。 */
   function renderBuildId() {
     var m = document.querySelector('meta[name="build"]');
-    var el = $('build-id');
-    if (el) el.textContent = (m && m.content) || 'dev';
+    var v = (m && m.content) || 'dev';
+    ['build-id', 'build-id-top'].forEach(function (id) {
+      var el = $(id);
+      if (el) el.textContent = v;
+    });
   }
 
   function init() {
