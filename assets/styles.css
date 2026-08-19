@@ -177,7 +177,7 @@ main {
 
 /* グリッド/フレックスの子は既定で min-width:auto。中身の広い表がページ全体を
    横に広げてしまうため 0 に落として、はみ出しは .table-wrap 内でスクロールさせる */
-main > *, .panel, .figure, .figure-grid > *, .readout > *, .table-wrap { min-width: 0; }
+main > *, .panel, .panel--measure > *, .figure, .figure-grid > *, .readout > *, .table-wrap { min-width: 0; }
 
 .panel {
   background: var(--surface-1);
@@ -842,4 +842,17 @@ main.slide-r { animation: slide-from-left .16s ease-out; }
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   margin: 0; padding: 14px; border: 1px dashed var(--grid); border-radius: var(--radius-sm);
   font-size: 13px; color: var(--text-secondary);
+}
+
+@media (max-width: 700px) {
+  /* 工程が多いときチップは折り返さず横スクロールにして、縦の場所を取らない。
+     親のフレックスに合わせて min-width:0 を入れないとページごと横に伸びる。 */
+  .measure-bar, .viewswitch__row { min-width: 0; }
+  .focus, .viewswitch__chips {
+    flex: 1 1 auto; min-width: 0; max-width: 100%;
+    flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+    -webkit-overflow-scrolling: touch; padding-bottom: 2px;
+  }
+  .focus::-webkit-scrollbar, .viewswitch__chips::-webkit-scrollbar { display: none; }
+  .focus .chip, .viewswitch__chips .chip { flex: none; }
 }

@@ -19,8 +19,8 @@
   var SCHEMA = 3;                          // 保存形式。これより新しいデータは書き換えない
   var THEME_KEY = 'ct-checker:theme';
   var MAX_ELEMENTS = 8;
-  var MAX_GROUPS = 12;     // 9個目以降は同じ色に斜線を重ねて見分ける
-  var MAX_STATIONS = 32;
+  var MAX_GROUPS = 20;     // 9個目以降は同じ色に斜線（45°/135°）を重ねて見分ける
+  var MAX_STATIONS = 60;
   var SERIES_SLOTS = 8;
 
   /* ------------------------------------------------------------------ 汎用 */
@@ -59,22 +59,35 @@
 
   function seriesVar(i) { return 'var(--series-' + (i % SERIES_SLOTS + 1) + ')'; }
 
-  /** 配色スロットを使い切った分は斜線を重ねて区別する（色の使い回しを避けるため）。 */
-  function textured(i) { return i >= SERIES_SLOTS; }
+
+  /**
+   * 配色は8色。9工程目からは同じ色に斜線を重ねて見分ける。
+   * 0＝無地 / 1＝45°の斜線 / 2＝135°の斜線（色だけに頼らないための第2の手がかり）。
+   */
+  function hueOf(i) { return i % SERIES_SLOTS; }
+  function variantOf(i) { return Math.floor(i / SERIES_SLOTS) % 3; }
 
   /** SVG の塗り。斜線が要る工程はパターンを参照する。 */
-  function svgFill(i) { return textured(i) ? 'url(#hatch' + (i % SERIES_SLOTS) + ')' : seriesVar(i); }
+  function svgFill(i) {
+    var v = variantOf(i);
+    return v === 0 ? seriesVar(hueOf(i)) : 'url(#hatch' + hueOf(i) + '-' + v + ')';
+  }
 
-  /** グラフで使う斜線パターンの定義（必要な色の分だけ作る）。 */
+  /** グラフで使う斜線パターンの定義（必要な組み合わせの分だけ作る）。 */
   function hatchDefs(indexes) {
     var need = {};
-    indexes.forEach(function (i) { if (textured(i)) need[i % SERIES_SLOTS] = true; });
+    indexes.forEach(function (i) {
+      var v = variantOf(i);
+      if (v) need[hueOf(i) + '-' + v] = true;
+    });
     var keys = Object.keys(need);
     if (!keys.length) return '';
     return '<defs>' + keys.map(function (k) {
+      var parts = k.split('-');
+      var deg = parts[1] === '1' ? 45 : 135;
       return '<pattern id="hatch' + k + '" width="7" height="7" patternUnits="userSpaceOnUse" ' +
-        'patternTransform="rotate(45)">' +
-        '<rect width="7" height="7" fill="' + seriesVar(+k) + '" />' +
+        'patternTransform="rotate(' + deg + ')">' +
+        '<rect width="7" height="7" fill="' + seriesVar(+parts[0]) + '" />' +
         '<line x1="0" y1="0" x2="0" y2="7" stroke="var(--surface-1)" stroke-width="2.6" />' +
         '</pattern>';
     }).join('') + '</defs>';
@@ -82,10 +95,11 @@
 
   /** HTML の色見本。斜線が要る工程は縞のグラデーションにする。 */
   function swatchBg(i) {
-    var c = seriesVar(i);
-    return textured(i)
-      ? 'background:repeating-linear-gradient(45deg,' + c + ',' + c + ' 3px,var(--surface-1) 3px,var(--surface-1) 5px)'
-      : 'background:' + c;
+    var c = seriesVar(hueOf(i));
+    var v = variantOf(i);
+    if (!v) return 'background:' + c;
+    return 'background:repeating-linear-gradient(' + (v === 1 ? '45deg' : '135deg') + ',' +
+      c + ',' + c + ' 3px,var(--surface-1) 3px,var(--surface-1) 5px)';
   }
 
   /** fmtTime が m:ss 表記に切り替わったら「秒」の単位は付けない。 */
@@ -773,7 +787,7 @@
       var t = e.touches[0];
       x0 = t.clientX; y0 = t.clientY;
       blocked = !!(e.target.closest &&
-        e.target.closest('.table-wrap, input, select, textarea, .tabs'));
+        e.target.closest('.table-wrap, input, select, textarea, .tabs, .focus, .viewswitch'));
     }, { passive: true });
 
     document.addEventListener('touchend', function (e) {
@@ -1796,7 +1810,7 @@
         idx += members.length;
         s.push('<line x1="' + nn(from + 3) + '" y1="' + nn(y0) + '" x2="' + nn(to - 3) + '" y2="' + nn(y0) +
           '" stroke="' + seriesVar(gi) + '" stroke-width="3" stroke-linecap="round" />');
-        if (to - from >= 42) {
+        if (to - from >= 56) {
           s.push(txt((from + to) / 2, y0 + 15, clipName(g.name, Math.max(4, Math.floor((to - from) / 12))),
             { anchor: 'middle', fill: 'var(--text-secondary)', size: 11, weight: 600 }));
         }
@@ -1851,9 +1865,12 @@
     var scale = niceScale(dataMax / 1000 * 1.02, 5);
     var yMax = scale.max * 1000;
 
-    var w = chartWidth(host), h = 300;
-    var padL = 48, padR = 24, padT = 30, padB = 46;
-    var plotW = w - padL - padR, plotH = h - padT - padB;
+    var w = chartWidth(host);
+    var padL = 48, padR = 24, padT = 30, plotH = 224;
+    var plotW = w - padL - padR;
+    var rotate = (plotW / sums.length) < 46;
+    var padB = rotate ? 76 : 46;
+    var h = padT + plotH + padB;
     var yOf = function (v) { return padT + plotH - (v / yMax) * plotH; };
 
     var s = ['<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="工程ごとの工数内訳">'];
@@ -1893,8 +1910,13 @@
         s.push(txt(cx, yOf(sm.sum) - 8, sec(sm.sum),
           { anchor: 'middle', fill: 'var(--text-primary)', size: 12, weight: 600, tabular: true }));
       }
-      s.push(txt(cx, padT + plotH + 18, clipName(sm.group.name, Math.max(4, Math.floor(band / 13))),
-        { anchor: 'middle', fill: 'var(--text-primary)', size: 12 }));
+      if (rotate) {
+        s.push(txt(cx, padT + plotH + 14, clipName(sm.group.name, 9),
+          { anchor: 'end', fill: 'var(--text-primary)', size: 11, rotate: -45 }));
+      } else {
+        s.push(txt(cx, padT + plotH + 18, clipName(sm.group.name, Math.max(4, Math.floor(band / 13))),
+          { anchor: 'middle', fill: 'var(--text-primary)', size: 12 }));
+      }
 
       TIPS['g-' + gi] = '<strong>' + esc(sm.group.name) + '</strong>' +
         segs.map(function (seg) {
