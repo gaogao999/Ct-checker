@@ -458,55 +458,72 @@ main > *, .panel, .figure, .figure-grid > *, .readout > *, .table-wrap { min-wid
 .multi-head__hint { margin: 0; font-size: 12.5px; color: var(--text-secondary); }
 
 .pcards {
-  display: grid; gap: 10px;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  display: grid; gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
 }
+
+/* 1枚を小さく保つ。上半分ぜんぶがラップボタン。 */
 .pcard {
-  display: grid; gap: 8px; padding: 12px;
-  grid-template-rows: auto auto auto 1fr auto auto;
-  border: 1px solid var(--border); border-radius: var(--radius);
-  background: var(--surface-1);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
   border-left: 4px solid var(--pc, var(--series-1));
+  background: var(--surface-1); overflow: hidden;
 }
+.pcard[data-run="true"] { background: color-mix(in srgb, var(--pc) 7%, var(--surface-1)); }
 .pcard[data-neck="true"] { box-shadow: inset 0 0 0 1px var(--critical); }
-.pcard__head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.pcard__name { font-weight: 650; font-size: 14px; }
-.pcard__key {
-  margin-left: auto; font-size: 11px; color: var(--text-muted);
-  border: 1px solid var(--border); border-radius: 5px; padding: 0 5px;
-}
-.badge {
-  font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px;
-  background: var(--critical); color: #fff;
-}
-.badge--muted { background: var(--surface-2); color: var(--text-secondary); }
-.pcard__time {
-  font-size: clamp(30px, 6vw, 38px); font-weight: 650; line-height: 1.05;
-  font-variant-numeric: tabular-nums; letter-spacing: -.01em;
-}
-.pcard__time small { font-size: 14px; font-weight: 500; color: var(--text-secondary); margin-left: 3px; }
-.pcard__elem { font-size: 12.5px; color: var(--text-secondary); min-height: 1.4em; }
-.pcard__btn {
-  appearance: none; cursor: pointer; width: 100%; min-height: 74px;
-  border: none; border-radius: var(--radius-sm);
-  background: var(--pc, var(--series-1)); color: #fff;
-  font-size: 17px; font-weight: 700; letter-spacing: .02em;
-  box-shadow: 0 2px 0 rgba(0, 0, 0, .18);
-  transition: transform .06s ease, filter .12s ease;
+
+.pcard__hit {
+  appearance: none; cursor: pointer; width: 100%;
+  display: grid; gap: 2px; padding: 8px 10px 7px;
+  border: none; background: transparent; color: inherit; text-align: left;
   touch-action: manipulation; -webkit-user-select: none; user-select: none;
 }
-.pcard__btn:hover { filter: brightness(1.07); }
-.pcard__btn:active { transform: translateY(2px); box-shadow: none; }
-.pcard__btn[data-idle="true"] { background: var(--surface-2); color: var(--text-primary); box-shadow: inset 0 0 0 2px var(--border); }
-.pcard__foot {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  font-size: 12.5px; color: var(--text-secondary);
+.pcard__hit:active { background: var(--surface-2); }
+
+.pcard__head { display: flex; align-items: center; gap: 6px; min-height: 18px; }
+.pcard__name {
+  font-weight: 650; font-size: 13.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.pcard__stat { font-variant-numeric: tabular-nums; }
-.pcard__stat b { color: var(--text-primary); font-weight: 650; }
-.pcard__actions { display: flex; gap: 6px; }
-.pcard__actions .btn { flex: 1; padding: 7px 4px; }
-.pcard__over { color: var(--critical); font-weight: 650; }
+.pcard__key {
+  margin-left: auto; font-size: 11px; color: var(--text-muted);
+  border: 1px solid var(--border); border-radius: 5px; padding: 0 5px; flex: none;
+}
+.badge {
+  font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 999px;
+  background: var(--critical); color: #fff; white-space: nowrap;
+}
+.badge--muted { background: var(--surface-2); color: var(--text-secondary); }
+
+.pcard__row { display: flex; align-items: baseline; gap: 8px; }
+.pcard__time {
+  font-size: 28px; font-weight: 650; line-height: 1.1; letter-spacing: -.01em;
+  font-variant-numeric: tabular-nums;
+}
+.pcard__time small { font-size: 12px; font-weight: 500; color: var(--text-secondary); margin-left: 2px; }
+.pcard__cta {
+  margin-left: auto; flex: none; align-self: center;
+  padding: 7px 14px; border-radius: 999px;
+  background: var(--pc, var(--series-1)); color: #fff;
+  font-size: 13px; font-weight: 700; white-space: nowrap;
+}
+.cta-short { display: none; }
+.pcard[data-run="false"] .pcard__cta {
+  background: transparent; color: var(--text-primary);
+  box-shadow: inset 0 0 0 1.5px var(--border);
+}
+.pcard__sub {
+  font-size: 11.5px; color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pcard__sub b { color: var(--text-primary); font-weight: 650; }
+
+.pcard__actions { display: flex; border-top: 1px solid var(--grid); }
+.pcard__actions .btn {
+  flex: 1; border: none; border-radius: 0; padding: 6px 2px;
+  font-size: 12px; font-weight: 500; background: transparent;
+}
+.pcard__actions .btn + .btn { border-left: 1px solid var(--grid); }
 
 /* ---------- 表示切替 ---------- */
 .viewswitch { display: grid; gap: 6px; padding: 4px 2px; }
@@ -546,12 +563,6 @@ main > *, .panel, .figure, .figure-grid > *, .readout > *, .table-wrap { min-wid
 .proc__label { font-size: 12px; color: var(--text-secondary); display: block; margin-bottom: 6px; }
 .proc .elements__add input { padding: 7px 10px; font-size: 13.5px; }
 
-@media (max-width: 560px) {
-  /* 工程が多いときスクロール量を抑える（タップ領域は 60px 以上を維持） */
-  .pcard { gap: 6px; padding: 10px; }
-  .pcard__btn { min-height: 62px; font-size: 16px; }
-  .pcard__time { font-size: 30px; }
-}
 
 /* 工程カードの稼働状態 */
 .pcard__run {
@@ -583,7 +594,7 @@ main > *, .panel, .figure, .figure-grid > *, .readout > *, .table-wrap { min-wid
 .pgroup + .pgroup { margin-top: 14px; }
 .pgroup__head {
   display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
-  margin-bottom: 8px; padding-bottom: 5px; border-bottom: 1px solid var(--grid);
+  margin-bottom: 7px; padding-bottom: 4px; border-bottom: 1px solid var(--grid);
 }
 .pgroup__bar {
   width: 4px; height: 15px; border-radius: 2px; background: var(--pc, var(--series-1));
@@ -592,12 +603,10 @@ main > *, .panel, .figure, .figure-grid > *, .readout > *, .table-wrap { min-wid
 .pgroup__name { font-size: 14px; font-weight: 700; }
 .pgroup__meta { font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 
-/* ステーションが多いときの詰め表示 */
-.pcards--dense { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
-.pcards--dense .pcard { gap: 6px; padding: 10px; }
-.pcards--dense .pcard__time { font-size: 27px; }
-.pcards--dense .pcard__btn { min-height: 58px; font-size: 15px; }
-.pcards--dense .pcard__elem { display: none; }
+/* ステーションが多いときはさらに詰める */
+.pcards--dense { grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); }
+.pcards--dense .pcard__time { font-size: 24px; }
+.pcards--dense .pcard__cta { padding: 6px 11px; font-size: 12px; }
 
 /* 設定：工程の中のステーション */
 .proc__count {
@@ -627,15 +636,6 @@ main > *, .panel, .figure, .figure-grid > *, .readout > *, .table-wrap { min-wid
 .stn__els .elements__item { padding: 4px 8px; }
 .help__lead { font-size: 13.5px; color: var(--text-secondary); margin: 0 0 10px; }
 
-@media (max-width: 560px) {
-  /* ステーションが多いときはスマホでも2列にしてスクロール量を抑える */
-  .pcards--dense { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .pcards--dense .pcard__time { font-size: 23px; }
-  .pcards--dense .pcard__btn { min-height: 54px; font-size: 13.5px; }
-  .pcards--dense .pcard__foot { font-size: 11.5px; gap: 6px; }
-  .pcards--dense .pcard__actions .btn { padding: 6px 2px; font-size: 12px; }
-  .pcards--dense .pcard__key { display: none; }
-}
 
 /* ---------- タブ（PC＝上部、スマホ＝下部固定） ---------- */
 .tabs {
@@ -737,4 +737,45 @@ main > *, .panel, .figure, .figure-grid > *, .readout > *, .table-wrap { min-wid
   .panel__head { margin-bottom: 10px; }
   .figure + .figure, .figure-grid { margin-top: 16px; }
   .app-foot { padding-bottom: 16px; }
+}
+
+@media (max-width: 700px) {
+  /* 1画面により多くのステーションを収める */
+  .pcards { grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 7px; }
+  .pcards--dense { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  .pcard__hit { padding: 7px 9px 6px; }
+  .pcard__time { font-size: 25px; }
+  .pcard__cta { padding: 6px 10px; font-size: 12px; }
+  .cta-long { display: none; }
+  .cta-short { display: inline; }
+  .pcard__sub { font-size: 11px; }
+  .pcard__actions .btn { padding: 5px 2px; font-size: 11.5px; }
+  .pgroup + .pgroup { margin-top: 10px; }
+  .pgroup__meta--wide { display: none; }
+  .chip { padding: 5px 10px; font-size: 12.5px; }
+  .chip--sub { padding: 4px 9px; font-size: 12px; }
+  .multi-head__time { font-size: 28px; }
+  .measure-bar { margin-bottom: 8px; }
+}
+
+/* 見出しを省いた工程のカードに付く工程名 */
+.pcard__group {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .02em;
+  color: var(--pc, var(--series-1)); flex: none;
+  max-width: 7em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+@media (max-width: 700px) {
+  .panel { padding: 10px; }
+  .pcards { gap: 6px; }
+  .pcard__actions .btn { padding: 4px 2px; font-size: 11px; }
+  .multi-head__time { font-size: 21px; }
+  .multi-head { gap: 8px; margin-bottom: 8px; }
+  .pgroup__name { font-size: 13px; }
+  .pgroup__head { margin-bottom: 5px; padding-bottom: 3px; }
+}
+
+.pcard__dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: var(--good);
 }

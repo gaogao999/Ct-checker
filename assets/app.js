@@ -786,15 +786,19 @@
         if (sm.neck) meta.push('ネック ' + esc(sm.neck.name) + ' ' + fmtTime(pStats(sm.neck).mean));
       }
       var asList = density() === 'list';
+      // 1ステーションだけの工程は見出しを省いて、工程名をカード内に出す
+      var inline = groups().length > 1 && list.length === 1 ? g.name : '';
       var body = list.map(function (p) {
         shown.push(p);
-        return asList ? rowHtml(p, shown.length, tt, neck) : cardHtml(p, shown.length, tt, neck);
+        return asList ? rowHtml(p, shown.length, tt, neck, inline)
+                      : cardHtml(p, shown.length, tt, neck, inline);
       }).join('');
       html += '<div class="pgroup" style="--pc:' + seriesVar(groupIndex(g)) + '">' +
-        (groups().length > 1
+        (groups().length > 1 && !inline
           ? '<div class="pgroup__head"><span class="pgroup__bar"></span>' +
             '<h3 class="pgroup__name">' + esc(g.name) + '</h3>' +
-            '<span class="pgroup__meta">' + meta.join('　') + '</span></div>'
+            '<span class="pgroup__meta">' + meta.slice(0, 1).join('') + '</span>' +
+            '<span class="pgroup__meta pgroup__meta--wide">' + meta.slice(1).join('　') + '</span></div>'
           : '') +
         (asList
           ? '<div class="srows">' + body + '</div>'
@@ -810,46 +814,50 @@
       : 'ステーションごとに独立したストップウォッチです。1つずつ開始しても、下のボタンでまとめて動かしても構いません。';
   }
 
-  function cardHtml(p, num, tt, neck) {
+  /**
+   * ステーションのカード。1枚を小さく保つため、上半分（名前＋経過＋操作ラベル）
+   * ぜんぶをラップボタンにして、停止・取消・破棄は下の細い行にまとめる。
+   */
+  function cardHtml(p, num, tt, neck, groupName) {
     var st = pStats(p);
     var els = pElements(p);
     var last = p.cycles.length ? totalOf(p.cycles[p.cycles.length - 1]) : null;
     var run = pRunning(p);
-    var lbl;
-    if (!p.started) lbl = '▶ 計測開始';
-    else if (!run) lbl = '▶ 再開';
-    else if (els.length < 2) lbl = 'サイクル完了';
-    else lbl = els[Math.min(p.pending.length, els.length - 1)].name + '完了';
+    // 狭い画面では短いほうのラベルを CSS で出し分ける
+    var lbl, lblShort;
+    if (!p.started) { lbl = '▶ 計測開始'; lblShort = '▶ 開始'; }
+    else if (!run) { lbl = '▶ 再開'; lblShort = '▶ 再開'; }
+    else if (els.length < 2) { lbl = 'サイクル完了'; lblShort = '完了'; }
+    else { lbl = els[Math.min(p.pending.length, els.length - 1)].name + '完了'; lblShort = '完了'; }
 
     var badges = '';
     if (neck === p && st.n) badges += '<span class="badge">ネック</span>';
     if (tt && st.n && st.mean > tt) badges += '<span class="badge badge--muted">TT超過</span>';
 
-    var runState = run
-      ? '<span class="pcard__run pcard__run--on">計測中</span>'
-      : '<span class="pcard__run">' + (p.started ? '停止中' : '未計測') + '</span>';
-
-    var elemLine = '<div class="pcard__elem">' + (els.length > 1
-      ? (p.started ? '現在のサイクル　' + (p.pending.length + 1) + '/' + els.length + '　' +
-          esc(els[Math.min(p.pending.length, els.length - 1)].name)
-        : '要素 ' + els.length + ' 個')
-      : '現在のサイクルの経過') + '</div>';
+    var sub = st.n
+      ? st.n + '回　直前 <b>' + fmtTime(last) + '</b>　平均 <b>' + fmtTime(st.mean) + '</b>'
+      : (run ? '計測中' : (p.started ? '停止中' : '未計測'));
+    if (els.length > 1 && p.started) {
+      sub = (p.pending.length + 1) + '/' + els.length + ' ' +
+        esc(els[Math.min(p.pending.length, els.length - 1)].name) + '　' + sub;
+    }
 
     return '<div class="pcard" data-id="' + esc(p.id) + '" data-neck="' + (neck === p && st.n ? 'true' : 'false') +
       '" data-run="' + (run ? 'true' : 'false') + '" style="--pc:' + colorOf(p) + '">' +
-      '<div class="pcard__head">' +
-        '<span class="pcard__name">' + esc(p.name) + '</span>' + runState + badges +
-        (num <= 9 ? '<span class="pcard__key">' + num + '</span>' : '') +
-      '</div>' +
-      '<div class="pcard__time" id="ptime-' + esc(p.id) + '">0.00<small>秒</small></div>' +
-      elemLine +
-      '<button type="button" class="pcard__btn" data-act="lap" data-id="' + esc(p.id) + '"' +
-        (run ? '' : ' data-idle="true"') + '>' + esc(lbl) + '</button>' +
-      '<div class="pcard__foot">' +
-        '<span class="pcard__stat">' + st.n + ' 回</span>' +
-        '<span class="pcard__stat">直前 <b>' + (last == null ? '—' : fmtTime(last)) + '</b></span>' +
-        '<span class="pcard__stat">平均 <b>' + (st.n ? fmtTime(st.mean) : '—') + '</b></span>' +
-      '</div>' +
+      '<button type="button" class="pcard__hit" data-act="lap" data-id="' + esc(p.id) + '">' +
+        '<span class="pcard__head">' +
+          (run ? '<span class="pcard__dot" title="計測中"></span>' : '') +
+          (groupName ? '<span class="pcard__group">' + esc(groupName) + '</span>' : '') +
+          '<span class="pcard__name">' + esc(p.name) + '</span>' + badges +
+          (num <= 9 ? '<span class="pcard__key">' + num + '</span>' : '') +
+        '</span>' +
+        '<span class="pcard__row">' +
+          '<span class="pcard__time" id="ptime-' + esc(p.id) + '">0.00<small>秒</small></span>' +
+          '<span class="pcard__cta"><span class="cta-long">' + esc(lbl) +
+            '</span><span class="cta-short">' + esc(lblShort) + '</span></span>' +
+        '</span>' +
+        '<span class="pcard__sub">' + sub + '</span>' +
+      '</button>' +
       '<div class="pcard__actions">' +
         '<button type="button" class="btn btn--sm" data-act="toggle" data-id="' + esc(p.id) + '"' +
           (run ? '' : ' disabled') + '>停止</button>' +
@@ -862,7 +870,7 @@
   }
 
   /** 1行1ステーションの詰め表示。行そのものがラップボタン。 */
-  function rowHtml(p, num, tt, neck) {
+  function rowHtml(p, num, tt, neck, groupName) {
     var st = pStats(p);
     var els = pElements(p);
     var run = pRunning(p);
@@ -879,6 +887,7 @@
       (neck === p && st.n ? 'true' : 'false') + '" style="--pc:' + colorOf(p) + '">' +
       '<button type="button" class="srow__main" data-act="lap" data-id="' + esc(p.id) + '">' +
         '<span class="srow__name">' + (num <= 9 ? '<span class="pcard__key">' + num + '</span> ' : '') +
+          (groupName ? '<span class="pcard__group">' + esc(groupName) + '</span> ' : '') +
           esc(p.name) + flags + '</span>' +
         '<span class="srow__time" id="ptime-' + esc(p.id) + '">0.00</span>' +
         '<span class="srow__sub">' + st.n + ' 回　平均 <b>' + (st.n ? fmtTime(st.mean) : '—') +

@@ -2,7 +2,7 @@
  * ナビゲーションはネットワーク優先（更新をすぐ反映）、
  * 静的ファイルはキャッシュ優先＋裏で更新（表示を待たせない）。
  * 計測データは localStorage 側にあり、ここでは扱わない。 */
-var CACHE = 'ct-checker-v4';
+var CACHE = 'ct-checker-v5';
 var SHELL = [
   './',
   './index.html',
@@ -50,16 +50,17 @@ self.addEventListener('fetch', function (e) {
     return;
   }
 
+  // 更新をすぐ反映したいのでオンライン時はネットワーク優先、
+  // つながらないときだけキャッシュを返す（オフラインでも起動できる）
   e.respondWith(
-    caches.match(req).then(function (hit) {
-      var net = fetch(req).then(function (res) {
-        if (res && res.ok) {
-          var copy = res.clone();
-          caches.open(CACHE).then(function (c) { c.put(req, copy); });
-        }
-        return res;
-      }).catch(function () { return hit; });
-      return hit || net;
+    fetch(req).then(function (res) {
+      if (res && res.ok) {
+        var copy = res.clone();
+        caches.open(CACHE).then(function (c) { c.put(req, copy); });
+      }
+      return res;
+    }).catch(function () {
+      return caches.match(req);
     })
   );
 });
