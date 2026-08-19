@@ -34,7 +34,7 @@ jobs:
         run: |
           mkdir -p _site/download
           cp index.html manifest.webmanifest sw.js _site/
-          cp -r assets icons _site/
+          cp -r assets icons presets _site/
           cp dist/ct-checker.html _site/download/
           touch _site/.nojekyll
           # HTML と JS/CSS の版がずれると、古いコードが新しいデータを壊しうる。

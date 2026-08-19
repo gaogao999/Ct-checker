@@ -1,0 +1,235 @@
+{
+  "app": "ct-checker",
+  "version": 3,
+  "schema": 3,
+  "note": "Assy1〜Assy9 / Station1〜11 のライン構成（計測データなし）",
+  "settings": {
+    "title": "",
+    "operator": "",
+    "memo": "",
+    "takt": null
+  },
+  "groups": [
+    {
+      "id": "g1",
+      "name": "Assy1"
+    },
+    {
+      "id": "g2",
+      "name": "Assy2"
+    },
+    {
+      "id": "g3",
+      "name": "Assy3"
+    },
+    {
+      "id": "g4",
+      "name": "Assy4"
+    },
+    {
+      "id": "g5",
+      "name": "Assy5"
+    },
+    {
+      "id": "g6",
+      "name": "Assy6"
+    },
+    {
+      "id": "g7",
+      "name": "Assy7"
+    },
+    {
+      "id": "g8",
+      "name": "Assy8"
+    },
+    {
+      "id": "g9",
+      "name": "Assy9"
+    }
+  ],
+  "stations": [
+    {
+      "id": "s1",
+      "groupId": "g2",
+      "name": "Station1",
+      "elements": [
+        {
+          "id": "es1",
+          "name": "1サイクル"
+        }
+      ],
+      "cycles": [],
+      "cycleStart": 0,
+      "pending": [],
+      "accBase": 0,
+      "started": false
+    },
+    {
+      "id": "s2",
+      "groupId": "g2",
+      "name": "Station2",
+      "elements": [
+        {
+          "id": "es2",
+          "name": "1サイクル"
+        }
+      ],
+      "cycles": [],
+      "cycleStart": 0,
+      "pending": [],
+      "accBase": 0,
+      "started": false
+    },
+    {
+      "id": "s3",
+      "groupId": "g3",
+      "name": "Station3",
+      "elements": [
+        {
+          "id": "es3",
+          "name": "1サイクル"
+        }
+      ],
+      "cycles": [],
+      "cycleStart": 0,
+      "pending": [],
+      "accBase": 0,
+      "started": false
+    },
+    {
+      "id": "s4",
+      "groupId": "g3",
+      "name": "Station4",
+      "elements": [
+        {
+          "id": "es4",
+          "name": "1サイクル"
+        }
+      ],
+      "cycles": [],
+      "cycleStart": 0,
+      "pending": [],
+      "accBase": 0,
+      "started": false
+    },
+    {
+      "id": "s5",
+      "groupId": "g4",
+      "name": "Station5",
+      "elements": [
+        {
+          "id": "es5",
+          "name": "1サイクル"
+        }
+      ],
+      "cycles": [],
+      "cycleStart": 0,
+      "pending": [],
+      "accBase": 0,
+      "started": false
+    },
+    {
+      "id": "s6",
+      "groupId": "g5",
+      "name": "Station6",
+      "elements": [
+        {
+          "id": "es6",
+          "name": "1サイクル"
+        }
+      ],
+      "cycles": [],
+      "cycleStart": 0,
+      "pending": [],
+      "accBase": 0,
+      "started": false
+    },
+    {
+      "id": "s7",
+      "groupId": "g6",
+      "name": "Station7",
+      "elements": [
+        {
+          "id": "es7",
+          "name": "1サイクル"
+        }
+      ],
+      "cycles": [],
+      "cycleStart": 0,
+      "pending": [],
+      "accBase": 0,
+      "started": false
+    },
+    {
+      "id": "s8",
+      "groupId": "g6",
+      "name": "Station8",
+      "elements": [
+        {
+          "id": "es8",
+          "name": "1サイクル"
+        }
+      ],
+      "cycles": [],
+      "cycleStart": 0,
+      "pending": [],
+      "accBase": 0,
+      "started": false
+    },
+    {
+      "id": "s9",
+      "groupId": "g7",
+      "name": "Station9",
+      "elements": [
+        {
+          "id": "es9",
+          "name": "1サイクル"
+        }
+      ],
+      "cycles": [],
+      "cycleStart": 0,
+      "pending": [],
+      "accBase": 0,
+      "started": false
+    },
+    {
+      "id": "s10",
+      "groupId": "g8",
+      "name": "Station10",
+      "elements": [
+        {
+          "id": "es10",
+          "name": "1サイクル"
+        }
+      ],
+      "cycles": [],
+      "cycleStart": 0,
+      "pending": [],
+      "accBase": 0,
+      "started": false
+    },
+    {
+      "id": "s11",
+      "groupId": "g9",
+      "name": "Station11",
+      "elements": [
+        {
+          "id": "es11",
+          "name": "1サイクル"
+        }
+      ],
+      "cycles": [],
+      "cycleStart": 0,
+      "pending": [],
+      "accBase": 0,
+      "started": false
+    }
+  ],
+  "accBase": 0,
+  "started": false,
+  "startedAt": null,
+  "view": "all",
+  "focus": "all",
+  "tab": "measure",
+  "density": null
+}

@@ -19,8 +19,8 @@
   var SCHEMA = 3;                          // 保存形式。これより新しいデータは書き換えない
   var THEME_KEY = 'ct-checker:theme';
   var MAX_ELEMENTS = 8;
-  var MAX_GROUPS = 8;      // 配色スロット数と揃える
-  var MAX_STATIONS = 24;
+  var MAX_GROUPS = 12;     // 9個目以降は同じ色に斜線を重ねて見分ける
+  var MAX_STATIONS = 32;
   var SERIES_SLOTS = 8;
 
   /* ------------------------------------------------------------------ 汎用 */
@@ -58,6 +58,35 @@
   }
 
   function seriesVar(i) { return 'var(--series-' + (i % SERIES_SLOTS + 1) + ')'; }
+
+  /** 配色スロットを使い切った分は斜線を重ねて区別する（色の使い回しを避けるため）。 */
+  function textured(i) { return i >= SERIES_SLOTS; }
+
+  /** SVG の塗り。斜線が要る工程はパターンを参照する。 */
+  function svgFill(i) { return textured(i) ? 'url(#hatch' + (i % SERIES_SLOTS) + ')' : seriesVar(i); }
+
+  /** グラフで使う斜線パターンの定義（必要な色の分だけ作る）。 */
+  function hatchDefs(indexes) {
+    var need = {};
+    indexes.forEach(function (i) { if (textured(i)) need[i % SERIES_SLOTS] = true; });
+    var keys = Object.keys(need);
+    if (!keys.length) return '';
+    return '<defs>' + keys.map(function (k) {
+      return '<pattern id="hatch' + k + '" width="7" height="7" patternUnits="userSpaceOnUse" ' +
+        'patternTransform="rotate(45)">' +
+        '<rect width="7" height="7" fill="' + seriesVar(+k) + '" />' +
+        '<line x1="0" y1="0" x2="0" y2="7" stroke="var(--surface-1)" stroke-width="2.6" />' +
+        '</pattern>';
+    }).join('') + '</defs>';
+  }
+
+  /** HTML の色見本。斜線が要る工程は縞のグラデーションにする。 */
+  function swatchBg(i) {
+    var c = seriesVar(i);
+    return textured(i)
+      ? 'background:repeating-linear-gradient(45deg,' + c + ',' + c + ' 3px,var(--surface-1) 3px,var(--surface-1) 5px)'
+      : 'background:' + c;
+  }
 
   /** fmtTime が m:ss 表記に切り替わったら「秒」の単位は付けない。 */
   function unitFor(ms) { return Math.abs(ms) >= 60000 ? '' : '秒'; }
@@ -903,7 +932,7 @@
       var n = stationsOf(g).length;
       var run = stationsOf(g).filter(pRunning).length;
       chips.push('<button type="button" class="chip" data-focus="' + esc(g.id) + '" aria-pressed="' +
-        (state.focus === g.id) + '"><span class="swatch" style="background:' + seriesVar(i) + '"></span>' +
+        (state.focus === g.id) + '"><span class="swatch" style="' + swatchBg(i) + '"></span>' +
         esc(g.name) + '<span class="chip__n">' + (run ? run + '/' : '') + n + '</span></button>');
     });
     host.innerHTML = chips.join('');
@@ -947,6 +976,10 @@
         '</div>';
     });
 
+    if (!shown.length) {
+      html = '<p class="empty-note">この工程にはステーションがありません。' +
+        '<button type="button" class="btn btn--sm" data-act="go-settings">設定で追加</button></p>';
+    }
     $('pcards').innerHTML = html;
     var runN = stations().filter(pRunning).length;
     $('multi-hint').textContent = anyStarted()
@@ -1104,7 +1137,7 @@
       (state.view === 'all') + '">ライン全体</button>'];
     groups().forEach(function (gr, i) {
       rows.push('<button type="button" class="chip" data-view="g:' + esc(gr.id) + '" aria-selected="' +
-        (g === gr) + '"><span class="swatch" style="background:' + seriesVar(i) + '"></span>' +
+        (g === gr) + '"><span class="swatch" style="' + swatchBg(i) + '"></span>' +
         esc(gr.name) + '<span class="chip__n">' + stationsOf(gr).length + '</span></button>');
     });
     $('view-groups').innerHTML = rows.join('');
@@ -1271,7 +1304,7 @@
       var sm = groupSummary(g);
       var neckMean = sm.neck ? pStats(sm.neck).mean : 0;
       var avg = sm.withData.length ? sm.sum / sm.withData.length : 0;
-      return '<tr><td><span class="swatch-cell"><span class="swatch" style="background:' + seriesVar(i) +
+      return '<tr><td><span class="swatch-cell"><span class="swatch" style="' + swatchBg(i) +
         '"></span>' + esc(g.name) + '</span></td>' +
         '<td class="num">' + sm.count + '</td>' +
         '<td class="num">' + (sm.withData.length ? sec(sm.sum) : '—') + '</td>' +
@@ -1462,6 +1495,7 @@
       return '<div class="proc" style="--pc:' + seriesVar(gi) + '">' +
         '<div class="proc__head">' +
           '<span class="elements__index">' + (gi + 1) + '</span>' +
+          '<span class="swatch" style="' + swatchBg(gi) + '"></span>' +
           '<input type="text" value="' + esc(g.name) + '" data-act="rename-group" data-id="' + esc(g.id) +
             '" maxlength="20" aria-label="工程名"' + (locked ? ' disabled' : '') + '>' +
           '<span class="proc__count">' + list.length + ' ST</span>' +
@@ -1692,6 +1726,7 @@
     var yOf = function (v) { return padT + plotH - (v / yMax) * plotH; };
 
     var s = ['<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="ステーションごとの平均サイクルタイム">'];
+    s.push(hatchDefs(list.map(function (p) { return groupIndex(groupOf(p)); })));
     scale.ticks.forEach(function (t) {
       var y = yOf(t * 1000);
       s.push('<line x1="' + padL + '" y1="' + nn(y) + '" x2="' + nn(padL + plotW) + '" y2="' + nn(y) +
@@ -1709,7 +1744,7 @@
       if (r.st.n) {
         var yTop = yOf(r.st.mean);
         s.push('<path d="' + topRounded(x, yTop, barW, padT + plotH - yTop, 4) +
-          '" fill="' + colorOf(r.p) + '" />');
+          '" fill="' + svgFill(groupIndex(groupOf(r.p))) + '" />');
         if (r.st.max > r.st.min && barW >= 8) {
           var y1 = yOf(r.st.min), y2 = yOf(r.st.max);
           s.push('<line x1="' + nn(cx) + '" y1="' + nn(y1) + '" x2="' + nn(cx) + '" y2="' + nn(y2) +
@@ -1761,8 +1796,10 @@
         idx += members.length;
         s.push('<line x1="' + nn(from + 3) + '" y1="' + nn(y0) + '" x2="' + nn(to - 3) + '" y2="' + nn(y0) +
           '" stroke="' + seriesVar(gi) + '" stroke-width="3" stroke-linecap="round" />');
-        s.push(txt((from + to) / 2, y0 + 15, clipName(g.name, Math.max(4, Math.floor((to - from) / 12))),
-          { anchor: 'middle', fill: 'var(--text-secondary)', size: 11, weight: 600 }));
+        if (to - from >= 42) {
+          s.push(txt((from + to) / 2, y0 + 15, clipName(g.name, Math.max(4, Math.floor((to - from) / 12))),
+            { anchor: 'middle', fill: 'var(--text-secondary)', size: 11, weight: 600 }));
+        }
         if (to < padL + plotW - 1) {
           s.push('<line x1="' + nn(to) + '" y1="' + padT + '" x2="' + nn(to) + '" y2="' + nn(padT + plotH) +
             '" stroke="var(--grid)" stroke-width="1" />');
@@ -1784,7 +1821,7 @@
     if (showGroups && groups().length > 1) {
       groups().forEach(function (g, gi) {
         if (!stationsOf(g).length) return;
-        lg.push('<span class="legend__item"><span class="legend__swatch" style="background:' + seriesVar(gi) +
+        lg.push('<span class="legend__item"><span class="legend__swatch" style="' + swatchBg(gi) +
           '"></span>' + esc(g.name) + '</span>');
       });
     }
@@ -1820,6 +1857,7 @@
     var yOf = function (v) { return padT + plotH - (v / yMax) * plotH; };
 
     var s = ['<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="工程ごとの工数内訳">'];
+    s.push(hatchDefs(sums.map(function (_, gi) { return gi; })));
     scale.ticks.forEach(function (t) {
       var y = yOf(t * 1000);
       s.push('<line x1="' + padL + '" y1="' + nn(y) + '" x2="' + nn(padL + plotW) + '" y2="' + nn(y) +
@@ -1842,9 +1880,9 @@
         var isTop = j === segs.length - 1;
         var hh = yBot - yTop - (isTop ? 0 : 2);
         if (hh < 1) hh = 1;
-        if (isTop) s.push('<path d="' + topRounded(x, yTop, barW, hh, 4) + '" fill="' + seriesVar(gi) + '" />');
+        if (isTop) s.push('<path d="' + topRounded(x, yTop, barW, hh, 4) + '" fill="' + svgFill(gi) + '" />');
         else s.push('<rect x="' + nn(x) + '" y="' + nn(yTop + 2) + '" width="' + nn(barW) +
-          '" height="' + nn(hh) + '" fill="' + seriesVar(gi) + '" />');
+          '" height="' + nn(hh) + '" fill="' + svgFill(gi) + '" />');
         if (hh >= 16 && barW >= 44) {
           s.push(txt(cx, yTop + hh / 2 + 4, clipName(seg.p.name, Math.floor(barW / 12)),
             { anchor: 'middle', fill: '#fff', size: 11 }));
@@ -2499,6 +2537,33 @@
     download(fileBase(state.settings) + '.json', JSON.stringify(payload, null, 2), 'application/json');
   }
 
+  /**
+   * ?preset=... で同じサイト内の構成ファイルを読み込む。
+   * 現場に「このリンクを開くだけ」で構成を配れるようにするため。
+   */
+  function loadPresetFromQuery() {
+    var m = /[?&]preset=([^&]+)/.exec(location.search);
+    if (!m) return;
+    var url;
+    try { url = new URL(decodeURIComponent(m[1]), location.href); } catch (e) { return; }
+    if (url.origin !== location.origin) { toast('同じサイト内のファイルだけ読み込めます'); return; }
+    fetch(url.href).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+      if (!d || !d.settings) { toast('構成ファイルを読み込めませんでした'); return; }
+      var msg = '構成を読み込みます（工程 ' + (d.groups ? d.groups.length : 1) +
+        '・ステーション ' + countUnits(d) + '）。よろしいですか？';
+      if (hasData()) msg += '\n※いまの計測データは自動バックアップしてから入れ替えます。';
+      if (!confirm(msg)) return;
+      autoArchive('構成の読込前');
+      state = normalize(d);
+      RUN = {};
+      syncSettingsInputs();
+      render();
+      save();
+      try { history.replaceState(null, '', location.pathname); } catch (e) { /* noop */ }
+      toast('構成を読み込みました');
+    }).catch(function () { toast('構成ファイルを読み込めませんでした'); });
+  }
+
   function importJson(file) {
     var reader = new FileReader();
     reader.onload = function () {
@@ -2562,9 +2627,11 @@
     $('pcards').addEventListener('click', function (e) {
       var b = e.target.closest('[data-act]');
       if (!b) return;
+      if (b.getAttribute('data-act') === 'go-settings') { setTab('settings'); return; }
       var p = stationFromEvent(b);
       if (!p) return;
       var act = b.getAttribute('data-act');
+      if (act === 'go-settings') { setTab('settings'); return; }
       if (act === 'tap') tap(p);
       else if (act === 'save') saveCycle(p);
       else if (act === 'clear') clearCurrent(p);
@@ -2903,6 +2970,7 @@
     setInterval(function () { if (anyRunning()) save(); }, 5000);
     requestAnimationFrame(tick);
     registerServiceWorker();
+    loadPresetFromQuery();
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

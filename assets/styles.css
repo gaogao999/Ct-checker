@@ -837,3 +837,9 @@ main.slide-r { animation: slide-from-left .16s ease-out; }
 
 .alertbar[data-kind="info"] { background: var(--accent); color: #fff; }
 .alertbar[data-kind="info"] .btn { background: #fff; color: var(--accent); }
+
+.empty-note {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 0; padding: 14px; border: 1px dashed var(--grid); border-radius: var(--radius-sm);
+  font-size: 13px; color: var(--text-secondary);
+}
