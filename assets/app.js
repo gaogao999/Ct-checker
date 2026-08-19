@@ -854,7 +854,28 @@
     return state.density || (stations().length > 8 ? 'list' : 'card');
   }
 
+  /** まだ何も登録していないときに、最初の一歩を計測画面に出す。 */
+  function renderSetupNote() {
+    var el = $('setup-note');
+    if (!el) return;
+    var fresh = stations().length === 1 && !hasData() && !anyStarted() &&
+      groups().length === 1 && pElements(stations()[0]).length === 1;
+    el.hidden = !fresh;
+    if (!fresh) return;
+    var pre = BUILTIN_PRESETS[0];
+    el.innerHTML = '<div class="setup-note__body">' +
+      '<strong>まだ工程が入っていません</strong>' +
+      '<span>用意された構成を入れるか、設定でステーションを追加してください。</span>' +
+      '</div>' +
+      '<div class="setup-note__actions">' +
+        '<button type="button" class="btn btn--primary" data-act="use-preset" data-builtin="' +
+          esc(pre.id) + '">' + esc(pre.name) + ' を入れる</button>' +
+        '<button type="button" class="btn" data-act="go-settings">設定を開く</button>' +
+      '</div>';
+  }
+
   function renderMeasure() {
+    renderSetupNote();
     var isMulti = multi();
     $('measure-single').hidden = isMulti;
     $('measure-multi').hidden = !isMulti;
@@ -2559,25 +2580,83 @@
     download(fileBase(state.settings) + '.json', JSON.stringify(payload, null, 2), 'application/json');
   }
 
-  /** 用意された構成の一覧を出す（presets/index.json があるときだけ）。 */
+  /**
+   * アプリに内蔵する構成。presets/ が読めない環境でも必ず選べるように、
+   * データそのものをコードに持たせる。
+   */
+  var BUILTIN_PRESETS = [{
+    id: 'assy-line',
+    name: 'Assy1〜Assy9 / Station1〜11',
+    note: '工程9・ステーション11（計測データなし）',
+    build: function () {
+      var spec = [
+        ['Assy1', []],
+        ['Assy2', ['Station1', 'Station2']],
+        ['Assy3', ['Station3', 'Station4']],
+        ['Assy4', ['Station5']],
+        ['Assy5', ['Station6']],
+        ['Assy6', ['Station7', 'Station8']],
+        ['Assy7', ['Station9']],
+        ['Assy8', ['Station10']],
+        ['Assy9', ['Station11']]
+      ];
+      var groups = [], stations = [];
+      spec.forEach(function (row) {
+        var g = { id: uid(), name: row[0] };
+        groups.push(g);
+        row[1].forEach(function (name) { stations.push(newStation(name, g.id)); });
+      });
+      return {
+        schema: SCHEMA, version: 3,
+        settings: { title: '', operator: '', memo: '', takt: null },
+        groups: groups, stations: stations,
+        started: false, startedAt: null, view: 'all', focus: 'all', tab: 'measure', density: null
+      };
+    }
+  }];
+
+  /** 構成を実際に入れる（内蔵・ファイルの両方から呼ぶ）。 */
+  function applyPresetData(d) {
+    if (!d || !d.settings) { toast('構成を読み込めませんでした'); return; }
+    var msg = '構成を読み込みます（工程 ' + (d.groups ? d.groups.length : 1) +
+      '・ステーション ' + countUnits(d) + '）。よろしいですか？';
+    if (hasData()) msg += '\n※いまの計測データは自動バックアップしてから入れ替えます。';
+    if (!confirm(msg)) return;
+    autoArchive('構成の読込前');
+    state = normalize(d);
+    RUN = {};
+    syncSettingsInputs();
+    render();
+    save();
+    announce('構成を読み込みました（工程 ' + groups().length + '・ステーション ' + stations().length + '）。');
+    toast('構成を読み込みました');
+  }
+
+  function presetItemHtml(x) {
+    return '<div class="preset">' +
+      '<div class="preset__body"><span class="preset__name">' + esc(x.name) + '</span>' +
+      (x.note ? '<span class="preset__note">' + esc(x.note) + '</span>' : '') + '</div>' +
+      '<button type="button" class="btn btn--primary" data-act="use-preset"' +
+        (x.id ? ' data-builtin="' + esc(x.id) + '"' : ' data-file="' + esc(x.file) + '"') +
+        '>読み込む</button></div>';
+  }
+
+  /** 用意された構成の一覧を出す（内蔵＋presets/index.json）。 */
   function renderPresets() {
     var block = $('preset-block');
     if (!block) return;
+    block.hidden = false;
+    $('preset-list').innerHTML = BUILTIN_PRESETS.map(presetItemHtml).join('');
+    // 追加の構成ファイルがあれば後ろに足す（無くても内蔵分は出る）
     fetch('presets/index.json', { cache: 'no-cache' }).then(function (r) {
       return r.ok ? r.json() : null;
     }).then(function (d) {
-      var list = d && Array.isArray(d.presets) ? d.presets : [];
-      if (!list.length) { block.hidden = true; return; }
-      block.hidden = false;
-      $('preset-list').innerHTML = list.map(function (x) {
-        return '<div class="preset">' +
-          '<div class="preset__body"><span class="preset__name">' + esc(x.name) + '</span>' +
-          (x.note ? '<span class="preset__note">' + esc(x.note) + '</span>' : '') + '</div>' +
-          '<button type="button" class="btn btn--primary" data-act="use-preset" data-file="' +
-            esc(x.file) + '">読み込む</button>' +
-        '</div>';
-      }).join('');
-    }).catch(function () { block.hidden = true; });
+      var list = (d && Array.isArray(d.presets) ? d.presets : []).filter(function (x) {
+        return x && x.file && x.file !== 'assy-line.json';
+      });
+      if (!list.length) return;
+      $('preset-list').innerHTML += list.map(presetItemHtml).join('');
+    }).catch(function () { /* 通信できなくても内蔵分は使える */ });
   }
 
   /** 構成ファイルを取り込む。取り込み前に必ずバックアップを取る。 */
@@ -2585,21 +2664,19 @@
     fetch(url, { cache: 'no-cache' }).then(function (r) {
       return r.ok ? r.json() : null;
     }).then(function (d) {
-      if (!d || !d.settings) { toast('構成ファイルを読み込めませんでした'); return; }
-      var msg = '構成を読み込みます（工程 ' + (d.groups ? d.groups.length : 1) +
-        '・ステーション ' + countUnits(d) + '）。よろしいですか？';
-      if (hasData()) msg += '\n※いまの計測データは自動バックアップしてから入れ替えます。';
-      if (!confirm(msg)) return;
-      autoArchive('構成の読込前');
-      state = normalize(d);
-      RUN = {};
-      syncSettingsInputs();
-      render();
-      save();
+      applyPresetData(d);
       if (quiet) { try { history.replaceState(null, '', location.pathname); } catch (e) { /* noop */ } }
-      announce('構成を読み込みました（工程 ' + groups().length + '・ステーション ' + stations().length + '）。');
-      toast('構成を読み込みました');
     }).catch(function () { toast('構成ファイルを読み込めませんでした（通信を確認してください）'); });
+  }
+
+  function usePreset(b) {
+    var id = b.getAttribute('data-builtin');
+    if (id) {
+      var pre = BUILTIN_PRESETS.filter(function (x) { return x.id === id; })[0];
+      if (pre) applyPresetData(pre.build());
+      return;
+    }
+    applyPreset('presets/' + b.getAttribute('data-file'), false);
   }
 
   /**
@@ -2876,7 +2953,13 @@
     // 保存測定
     $('preset-list').addEventListener('click', function (e) {
       var b = e.target.closest('[data-act="use-preset"]');
-      if (b) applyPreset('presets/' + b.getAttribute('data-file'), false);
+      if (b) usePreset(b);
+    });
+    $('setup-note').addEventListener('click', function (e) {
+      var b = e.target.closest('[data-act]');
+      if (!b) return;
+      if (b.getAttribute('data-act') === 'use-preset') usePreset(b);
+      else if (b.getAttribute('data-act') === 'go-settings') setTab('settings');
     });
 
     $('btn-save-session').addEventListener('click', saveSession);
