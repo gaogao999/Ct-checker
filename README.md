@@ -24,11 +24,19 @@
 
 ## 公開ページ（GitHub Pages）
 
-`main` に push すると GitHub Actions が Pages へ自動デプロイします
-（`.github/workflows/pages.yml`）。公開先は `https://<ユーザー名>.github.io/Ct-checker/` です。
+**https://gaogao999.github.io/Ct-checker/**
+
+`main` に push すると GitHub Actions がビルドして `gh-pages` ブランチへ公開します
+（`.github/workflows/pages.yml`）。
+
+初回だけリポジトリ側の設定が要る場合があります。ページが 404 になるときは
+**Settings → Pages → Source: Deploy from a branch → `gh-pages` / `/ (root)`** を選んでください
+（1〜2分で公開されます）。Source を「GitHub Actions」で運用したい場合は、
+リポジトリ変数 `PAGES_SOURCE` に `actions` を設定するとそちらの経路が有効になります。
 
 iPhone では Safari で開き、共有メニューの **「ホーム画面に追加」** を押すと、
 アドレスバーのないアプリとして起動できます（PWA。オフラインでも開けます）。
+配布用の単一 HTML は `https://gaogao999.github.io/Ct-checker/download/ct-checker.html` に置かれます。
 
 ## 使い方
 

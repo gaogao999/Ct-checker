@@ -60,12 +60,13 @@ jobs:
         with:
           path: _site
 
-  # Pages の Source が「GitHub Actions」のときだけ成功する。
-  # 「Deploy from a branch」運用なら失敗しても構わないので全体は赤にしない。
+  # Pages の Source を「GitHub Actions」にしている場合だけ動かす。
+  # 既定は gh-pages ブランチ運用なので実行しない（毎回失敗させないため）。
+  # 使うときはリポジトリ変数 PAGES_SOURCE を actions に設定する。
   deploy:
     needs: build
+    if: vars.PAGES_SOURCE == 'actions'
     runs-on: ubuntu-latest
-    continue-on-error: true
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
