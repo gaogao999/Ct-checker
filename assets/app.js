@@ -107,7 +107,9 @@
       stations: [newStation('ステーション1', g.id)],
       startedAt: null,
       view: 'all',    // 'all' | 'g:<groupId>' | 's:<stationId>'
-      focus: 'all'    // 計測パネルで表示する工程 'all' | <groupId>
+      focus: 'all',   // 計測パネルで表示する工程 'all' | <groupId>
+      tab: 'measure', // 'measure' | 'stats' | 'table' | 'settings'
+      density: null   // null(自動) | 'card' | 'list'
     };
   }
 
@@ -236,11 +238,23 @@
       started: anyStarted(),
       startedAt: state.startedAt,
       view: state.view,
-      focus: state.focus
+      focus: state.focus,
+      tab: state.tab,
+      density: state.density
     };
   }
+  var saveFailed = false;
   function save() {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(snapshot())); } catch (e) { /* 保存不可でも続行 */ }
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify(snapshot()));
+      if (saveFailed) { saveFailed = false; updateStorageHint(); }
+    } catch (e) {
+      if (!saveFailed) {
+        saveFailed = true;
+        updateStorageHint();
+        toast('保存できませんでした。保存領域がいっぱいかもしれません');
+      }
+    }
   }
   function saveSoon() {
     clearTimeout(saveTimer);
@@ -323,6 +337,8 @@
     s.startedAt = d.startedAt || null;
     s.view = validView(s, d.view);
     s.focus = (d.focus && ids.indexOf(d.focus) >= 0) ? d.focus : 'all';
+    s.tab = ['measure', 'stats', 'table', 'settings'].indexOf(d.tab) >= 0 ? d.tab : 'measure';
+    s.density = (d.density === 'card' || d.density === 'list') ? d.density : null;
     return s;
   }
 
@@ -347,7 +363,64 @@
   }
   function saveSessions(list) {
     try { localStorage.setItem(SESSION_KEY, JSON.stringify(list)); }
-    catch (e) { toast('保存領域がいっぱいです'); }
+    catch (e) { toast('保存領域がいっぱいです。古い自動保存を削除してください'); }
+  }
+
+  /** 消える前に必ず控えを取る。リセット・読込・インポートの直前に呼ぶ。 */
+  function autoArchive(reason) {
+    if (!hasData()) return;
+    var list = loadSessions();
+    list.unshift({
+      id: uid(), auto: true,
+      name: '自動保存 ' + fmtDateTime(nowIso()) + '（' + reason + '）',
+      savedAt: nowIso(),
+      data: JSON.parse(JSON.stringify(snapshot()))
+    });
+    saveSessions(trimSessions(list));
+    renderSessions();
+  }
+
+  /** 上限を超えたら自動保存の古いものから削る（手動保存は残す）。 */
+  function trimSessions(list) {
+    var LIMIT = 60;
+    if (list.length <= LIMIT) return list;
+    var keep = [];
+    var autos = [];
+    list.forEach(function (x) { (x.auto ? autos : keep).push(x); });
+    var room = Math.max(0, LIMIT - keep.length);
+    var keptAutos = autos.slice(0, room);
+    return list.filter(function (x) { return !x.auto || keptAutos.indexOf(x) >= 0; });
+  }
+
+  /** 端末にデータを長く残してもらう（対応ブラウザのみ） */
+  function requestPersist() {
+    if (!navigator.storage || !navigator.storage.persist) return;
+    try {
+      navigator.storage.persisted().then(function (ok) {
+        if (!ok) navigator.storage.persist().catch(function () { /* 断られても続行 */ });
+      }).catch(function () { /* noop */ });
+    } catch (e) { /* noop */ }
+  }
+
+  function updateStorageHint() {
+    var el = $('storage-hint');
+    if (!el) return;
+    if (saveFailed) {
+      el.className = 'hint hint--warn';
+      el.textContent = '⚠ ブラウザに保存できませんでした。古い自動保存を削除するか、JSON で書き出して退避してください。';
+      return;
+    }
+    if (!storageOk()) {
+      el.className = 'hint hint--warn';
+      el.textContent = '⚠ この環境ではブラウザへの自動保存が使えません。CSV / JSON で書き出して保管してください。';
+      return;
+    }
+    var list = loadSessions();
+    var autos = list.filter(function (x) { return x.auto; }).length;
+    el.className = 'hint';
+    el.textContent = 'リセット・読込・JSON取り込みの直前には自動でバックアップを取ります' +
+      '（自動保存 ' + autos + ' 件／手動保存 ' + (list.length - autos) + ' 件）。' +
+      '端末を移すときは JSON で書き出してください。';
   }
 
   /* ------------------------------------------------------------- 表示スコープ */
@@ -489,7 +562,8 @@
   }
 
   function resetAll() {
-    if (hasData() && !confirm('計測データをすべて消去します。よろしいですか？\n（「現在の測定を保存」で残せます）')) return;
+    if (hasData() && !confirm('計測データを消去して測り直します。よろしいですか？\n（消す前に自動でバックアップを取り、「保存した測定」から戻せます）')) return;
+    autoArchive('リセット前');
     state.startedAt = null;
     stations().forEach(function (p) {
       p.cycles = []; p.pending = []; p.cycleStart = 0; p.accBase = 0; p.started = false;
@@ -515,6 +589,31 @@
     if (document.visibilityState === 'hidden') save();
   });
 
+  /* ================================================================ タブ */
+  var TABS = ['measure', 'stats', 'table', 'settings'];
+
+  function applyTab() {
+    var t = state.tab;
+    document.querySelectorAll('[data-tab-panel]').forEach(function (el) {
+      var tabs = el.getAttribute('data-tab-panel').split(' ');
+      var want = tabs.indexOf(t) >= 0;
+      if (el.id === 'viewswitch') want = want && multi();
+      el.hidden = !want;
+    });
+    document.querySelectorAll('.tab').forEach(function (b) {
+      b.setAttribute('aria-current', String(b.getAttribute('data-tab') === t));
+    });
+  }
+
+  function setTab(t) {
+    if (TABS.indexOf(t) < 0 || state.tab === t) return;
+    state.tab = t;
+    applyTab();
+    renderCharts();          // 隠れている間に幅が変わっているため描き直す
+    window.scrollTo(0, 0);
+    saveSoon();
+  }
+
   /* ============================================================== 描画：計測 */
   /** 計測パネルに表示するステーション（工程で絞り込む） */
   function focusStations() {
@@ -522,8 +621,21 @@
     return stationsOf(groupById(state.focus));
   }
 
+  function renderLive() {
+    var run = stations().filter(pRunning).length;
+    var live = $('app-live');
+    var badge = $('tab-badge');
+    live.hidden = !run;
+    badge.hidden = !run;
+    if (run) {
+      badge.textContent = String(run);
+      $('app-live-text').textContent = (multi() ? '計測中 ' + run + ' ' : '計測中 ') + fmtTime(elapsed());
+    }
+  }
+
   /** 毎フレーム動かす数字だけを更新する。 */
   function renderReadout() {
+    renderLive();
     if (multi()) {
       var tot = elapsed();
       $('multi-total').textContent = fmtTime(tot);
@@ -542,13 +654,25 @@
     $('readout-total').textContent = fmtTime(elapsed());
   }
 
+  /** 表示密度。未指定ならステーション数で自動判定。 */
+  function density() {
+    return state.density || (stations().length > 8 ? 'list' : 'card');
+  }
+
   function renderMeasure() {
     var isMulti = multi();
     $('measure-single').hidden = isMulti;
     $('measure-multi').hidden = !isMulti;
-    if (isMulti) { renderFocusChips(); renderCards(); } else renderSingleMeasure();
+    if (isMulti) { renderFocusChips(); renderDensityChips(); renderCards(); } else renderSingleMeasure();
     renderControls();
     renderReadout();
+  }
+
+  function renderDensityChips() {
+    var d = density();
+    document.querySelectorAll('#density [data-density]').forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.getAttribute('data-density') === d));
+    });
   }
 
   function renderSingleMeasure() {
@@ -656,20 +780,26 @@
       if (!list.length) return;
       var sm = groupSummary(g);
       var meta = [];
-      meta.push(list.length + ' ステーション');
+      meta.push(list.length + ' ST');
       if (sm.withData.length) {
-        meta.push('合計工数 ' + sec(sm.sum, sm.sum >= 60000 ? 1 : 2) + ' 秒');
-        if (sm.neck) meta.push('ネック ' + esc(sm.neck.name) + ' ' + fmtTime(pStats(sm.neck).mean) + ' 秒');
+        meta.push('工数 ' + sec(sm.sum, sm.sum >= 60000 ? 1 : 2) + ' 秒');
+        if (sm.neck) meta.push('ネック ' + esc(sm.neck.name) + ' ' + fmtTime(pStats(sm.neck).mean));
       }
+      var asList = density() === 'list';
+      var body = list.map(function (p) {
+        shown.push(p);
+        return asList ? rowHtml(p, shown.length, tt, neck) : cardHtml(p, shown.length, tt, neck);
+      }).join('');
       html += '<div class="pgroup" style="--pc:' + seriesVar(groupIndex(g)) + '">' +
         (groups().length > 1
           ? '<div class="pgroup__head"><span class="pgroup__bar"></span>' +
             '<h3 class="pgroup__name">' + esc(g.name) + '</h3>' +
             '<span class="pgroup__meta">' + meta.join('　') + '</span></div>'
           : '') +
-        '<div class="pcards' + (visible.length > 6 ? ' pcards--dense' : '') + '">' +
-        list.map(function (p) { shown.push(p); return cardHtml(p, shown.length, tt, neck); }).join('') +
-        '</div></div>';
+        (asList
+          ? '<div class="srows">' + body + '</div>'
+          : '<div class="pcards' + (visible.length > 6 ? ' pcards--dense' : '') + '">' + body + '</div>') +
+        '</div>';
     });
 
     $('pcards').innerHTML = html;
@@ -731,6 +861,39 @@
     '</div>';
   }
 
+  /** 1行1ステーションの詰め表示。行そのものがラップボタン。 */
+  function rowHtml(p, num, tt, neck) {
+    var st = pStats(p);
+    var els = pElements(p);
+    var run = pRunning(p);
+    var cta;
+    if (!run) cta = p.started ? '▶ 再開' : '▶ 開始';
+    else if (els.length < 2) cta = 'タップでサイクル完了';
+    else cta = els[Math.min(p.pending.length, els.length - 1)].name + '完了';
+
+    var flags = '';
+    if (neck === p && st.n) flags += ' <span class="badge">ネック</span>';
+    if (tt && st.n && st.mean > tt) flags += ' <span class="badge badge--muted">TT超過</span>';
+
+    return '<div class="srow" data-run="' + (run ? 'true' : 'false') + '" data-neck="' +
+      (neck === p && st.n ? 'true' : 'false') + '" style="--pc:' + colorOf(p) + '">' +
+      '<button type="button" class="srow__main" data-act="lap" data-id="' + esc(p.id) + '">' +
+        '<span class="srow__name">' + (num <= 9 ? '<span class="pcard__key">' + num + '</span> ' : '') +
+          esc(p.name) + flags + '</span>' +
+        '<span class="srow__time" id="ptime-' + esc(p.id) + '">0.00</span>' +
+        '<span class="srow__sub">' + st.n + ' 回　平均 <b>' + (st.n ? fmtTime(st.mean) : '—') +
+          '</b>　<span class="srow__cta">' + esc(cta) + '</span></span>' +
+      '</button>' +
+      '<div class="srow__side">' +
+        '<button type="button" class="btn btn--sm" data-act="toggle" data-id="' + esc(p.id) + '"' +
+          (run ? '' : ' disabled') + ' aria-label="' + esc(p.name) + ' を停止">停止</button>' +
+        '<button type="button" class="btn btn--sm" data-act="undo" data-id="' + esc(p.id) + '"' +
+          (p.cycles.length || p.pending.length ? '' : ' disabled') + ' aria-label="' + esc(p.name) +
+          ' の直前を取消">取消</button>' +
+      '</div>' +
+    '</div>';
+  }
+
   function renderControls() {
     var p0 = stations()[0];
     var list = targetsForBulk();
@@ -738,8 +901,8 @@
     var started = list.some(function (p) { return p.started; });
     var btn = $('btn-pause');
     btn.disabled = false;
-    var scope = (multi() && state.focus !== 'all') ? groupById(state.focus).name : '全';
-    if (multi()) btn.textContent = run ? scope + 'ステーションを一時停止' : (started ? scope + 'ステーションを再開' : scope + 'ステーションを開始');
+    var scope = (multi() && state.focus !== 'all') ? groupById(state.focus).name : '全ステーション';
+    if (multi()) btn.textContent = scope + (run ? 'を一時停止' : (started ? 'を再開' : 'を開始'));
     else btn.textContent = run ? '一時停止' : (p0.started ? '再開' : '計測開始');
     $('btn-undo').hidden = multi();
     $('btn-discard').hidden = multi();
@@ -1174,7 +1337,8 @@
         var ps = stats(p.cycles.filter(function (c) { return !c.excluded; }).map(totalOf));
         if (ps.n && ps.mean > neckMean) { neckMean = ps.mean; neckName = p.name; }
       });
-      return '<tr><td>' + esc(s.name) + '</td><td>' + fmtDateTime(s.savedAt) + '</td>' +
+      return '<tr><td>' + (s.auto ? '<span class="badge badge--muted">自動</span> ' : '') +
+        esc(s.name) + '</td><td>' + fmtDateTime(s.savedAt) + '</td>' +
         '<td class="num">' + st.groups.length + '</td><td class="num">' + st.stations.length + '</td>' +
         '<td class="num">' + total + '</td>' +
         '<td class="num">' + (neckMean ? esc(neckName) + ' ' + sec(neckMean) : '—') + '</td>' +
@@ -1183,6 +1347,7 @@
         '<button type="button" class="btn btn--sm btn--danger" data-act="del-session" data-id="' + esc(s.id) + '">削除</button></td></tr>';
     }).join('');
     t.innerHTML = head + '<tbody>' + body + '</tbody>';
+    updateStorageHint();
   }
 
   function syncSettingsInputs() {
@@ -1199,6 +1364,7 @@
     renderTables();
     renderProcList();
     renderCharts();
+    applyTab();
   }
 
   /* ============================================================== グラフ描画 */
@@ -2121,7 +2287,8 @@
       var d;
       try { d = JSON.parse(reader.result); } catch (e) { toast('JSONを読み込めませんでした'); return; }
       if (!d || !d.settings) { toast('CT Checker の JSON ではありません'); return; }
-      if (hasData() && !confirm('現在の計測データを破棄して読み込みます。よろしいですか？')) return;
+      if (hasData() && !confirm('現在の計測データを置き換えて読み込みます。よろしいですか？\n（置き換える前に自動でバックアップを取ります）')) return;
+      autoArchive('JSON取り込み前');
       state = normalize(d);
       RUN = {};
       syncSettingsInputs();
@@ -2151,7 +2318,8 @@
   function loadSession(id) {
     var s = loadSessions().filter(function (x) { return x.id === id; })[0];
     if (!s) return;
-    if (hasData() && !confirm('現在の計測データを破棄して「' + s.name + '」を読み込みます。よろしいですか？')) return;
+    if (hasData() && !confirm('現在の計測データを置き換えて「' + s.name + '」を読み込みます。よろしいですか？\n（置き換える前に自動でバックアップを取ります）')) return;
+    autoArchive('読込前');
     state = normalize(s.data || s);
     RUN = {};
     syncSettingsInputs();
@@ -2181,6 +2349,19 @@
       else if (act === 'toggle') toggleProc(p);
       else if (act === 'undo') undo(p);
       else if (act === 'discard') discardCycle(p);
+    });
+
+    $('tabs').addEventListener('click', function (e) {
+      var b = e.target.closest('[data-tab]');
+      if (b) setTab(b.getAttribute('data-tab'));
+    });
+
+    $('density').addEventListener('click', function (e) {
+      var b = e.target.closest('[data-density]');
+      if (!b) return;
+      state.density = b.getAttribute('data-density');
+      renderMeasure();
+      saveSoon();
     });
 
     $('focus-chips').addEventListener('click', function (e) {
@@ -2462,6 +2643,16 @@
     } catch (e) { return false; }
   }
 
+  /** GitHub Pages などに置いたときはオフラインでも開けるようにする。 */
+  function registerServiceWorker() {
+    if (!('serviceWorker' in navigator)) return;
+    if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') return;
+    if (typeof window.claude !== 'undefined') return;   // 共有ページでは登録しない
+    try {
+      navigator.serviceWorker.register('sw.js').catch(function () { /* 失敗しても通常動作 */ });
+    } catch (e) { /* noop */ }
+  }
+
   function init() {
     initTheme();
     load();
@@ -2469,6 +2660,8 @@
     bind();
     render();
     renderSessions();
+    requestPersist();
+    updateStorageHint();
     if (!storageOk()) {
       document.querySelector('.app-foot p').textContent =
         'この環境ではブラウザへの自動保存が使えません。計測結果はページを閉じると消えるため、' +
@@ -2477,6 +2670,7 @@
     if (anyStarted()) announce('前回のデータを復元しました（停止中）。「再開」で続きから計測できます。');
     setInterval(function () { if (anyRunning()) save(); }, 5000);
     requestAnimationFrame(tick);
+    registerServiceWorker();
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

@@ -6,7 +6,15 @@
 <meta name="color-scheme" content="light dark">
 <meta name="description" content="現場でサイクルタイムを計測・集計するアプリ。複数工程の同時計測、要素作業ごとのラップ計測、ばらつき分析、タクトタイム比較、CSV出力に対応。">
 <title>CT Checker – サイクルタイム測定</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>⏱</text></svg>">
+<meta name="theme-color" content="#fcfcfb" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1a1a19" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="CT Checker">
+<link rel="icon" href="icons/icon-192.png" sizes="192x192">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
 <link rel="stylesheet" href="assets/styles.css">
 </head>
 <body>
@@ -19,6 +27,10 @@
       <strong>CT Checker</strong>
       <small>サイクルタイム測定</small>
     </span>
+  </div>
+  <div class="app-bar__live" id="app-live" hidden>
+    <span class="app-bar__dot"></span>
+    <span id="app-live-text"></span>
   </div>
   <div class="app-bar__actions">
     <button type="button" id="btn-help" class="btn btn--ghost" aria-expanded="false" aria-controls="help">使い方</button>
@@ -46,9 +58,28 @@
   </ul>
 </div>
 
+<nav class="tabs" id="tabs" aria-label="画面切替">
+  <button type="button" class="tab" data-tab="measure" aria-current="true">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2"/><path d="M9 2h6"/></svg>
+    <span>計測</span><span class="tab__badge" id="tab-badge" hidden></span>
+  </button>
+  <button type="button" class="tab" data-tab="stats">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/></svg>
+    <span>集計</span>
+  </button>
+  <button type="button" class="tab" data-tab="table">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 14.5h18M9 4v16"/></svg>
+    <span>明細</span>
+  </button>
+  <button type="button" class="tab" data-tab="settings">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg>
+    <span>設定</span>
+  </button>
+</nav>
+
 <main>
   <!-- ============ 計測 ============ -->
-  <section class="panel panel--measure" id="measure" aria-labelledby="h-measure">
+  <section class="panel panel--measure" id="measure" data-tab-panel="measure" aria-labelledby="h-measure">
     <h2 class="sr-only" id="h-measure">計測</h2>
 
     <!-- 単一工程モード -->
@@ -91,9 +122,15 @@
           <span class="multi-head__time" id="multi-total">0.00</span>
           <span class="readout__unit" id="multi-unit">秒</span>
         </div>
+        <div class="density" id="density" role="group" aria-label="表示密度">
+          <button type="button" class="chip chip--sub" data-density="card">カード</button>
+          <button type="button" class="chip chip--sub" data-density="list">リスト</button>
+        </div>
         <p class="multi-head__hint" id="multi-hint"></p>
       </div>
-      <div class="focus" id="focus-chips" role="group" aria-label="表示する工程"></div>
+      <div class="measure-bar">
+        <div class="focus" id="focus-chips" role="group" aria-label="表示する工程"></div>
+      </div>
       <div id="pcards"></div>
     </div>
 
@@ -107,7 +144,7 @@
   </section>
 
   <!-- ============ 表示切替 ============ -->
-  <div class="viewswitch" id="viewswitch" hidden>
+  <div class="viewswitch" id="viewswitch" data-tab-panel="stats table" hidden>
     <div class="viewswitch__row">
       <span class="viewswitch__label">表示</span>
       <div class="viewswitch__chips" id="view-groups" role="tablist" aria-label="集計の表示対象（工程）"></div>
@@ -119,7 +156,7 @@
   </div>
 
   <!-- ============ 集計 ============ -->
-  <section class="panel" aria-labelledby="h-stats">
+  <section class="panel" data-tab-panel="stats" aria-labelledby="h-stats">
     <div class="panel__head">
       <h2 id="h-stats">集計<span class="panel__scope" id="scope-stats"></span></h2>
       <div class="panel__head-actions" id="stats-actions">
@@ -132,7 +169,7 @@
   </section>
 
   <!-- ============ グラフ ============ -->
-  <section class="panel" aria-labelledby="h-charts">
+  <section class="panel" data-tab-panel="stats" aria-labelledby="h-charts">
     <div class="panel__head"><h2 id="h-charts">グラフ<span class="panel__scope" id="scope-charts"></span></h2></div>
 
     <!-- ライン全体 / 工程 -->
@@ -193,7 +230,7 @@
   </section>
 
   <!-- ============ 明細 ============ -->
-  <section class="panel" aria-labelledby="h-table">
+  <section class="panel" data-tab-panel="table" aria-labelledby="h-table">
     <div class="panel__head">
       <h2 id="h-table">明細<span class="panel__scope" id="scope-table"></span></h2>
       <div class="panel__head-actions">
@@ -230,7 +267,7 @@
   </section>
 
   <!-- ============ 設定 ============ -->
-  <section class="panel" aria-labelledby="h-settings">
+  <section class="panel" data-tab-panel="settings" aria-labelledby="h-settings">
     <div class="panel__head"><h2 id="h-settings">設定</h2></div>
     <div class="form-grid">
       <label class="field">
@@ -265,13 +302,14 @@
   </section>
 
   <!-- ============ 保存データ ============ -->
-  <section class="panel" aria-labelledby="h-sessions">
+  <section class="panel" data-tab-panel="settings" aria-labelledby="h-sessions">
     <div class="panel__head">
       <h2 id="h-sessions">保存した測定</h2>
       <div class="panel__head-actions">
         <button type="button" id="btn-save-session" class="btn btn--sm btn--primary">現在の測定を保存</button>
       </div>
     </div>
+    <p class="hint" id="storage-hint"></p>
     <div class="table-wrap">
       <table class="data-table" id="table-sessions">
         <caption class="sr-only">保存済みの測定</caption>
@@ -280,7 +318,7 @@
   </section>
 </main>
 
-<footer class="app-foot">
+<footer class="app-foot" data-tab-panel="settings">
   <p>データはこのブラウザ内（localStorage）にのみ保存されます。端末を変えるときは JSON で書き出してください。</p>
 </footer>
 
