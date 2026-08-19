@@ -98,6 +98,9 @@
 
 * { box-sizing: border-box; }
 
+/* display を持つ要素にも hidden 属性を効かせる */
+[hidden] { display: none !important; }
+
 html, body { margin: 0; padding: 0; }
 
 body {
@@ -169,6 +172,10 @@ main {
   gap: clamp(12px, 2.5vw, 20px);
 }
 
+/* グリッド/フレックスの子は既定で min-width:auto。中身の広い表がページ全体を
+   横に広げてしまうため 0 に落として、はみ出しは .table-wrap 内でスクロールさせる */
+main > *, .panel, .figure, .figure-grid > *, .readout > *, .table-wrap { min-width: 0; }
+
 .panel {
   background: var(--surface-1);
   border: 1px solid var(--border);
@@ -181,6 +188,11 @@ main {
   gap: 12px; flex-wrap: wrap; margin-bottom: 14px;
 }
 .panel__head h2 { font-size: 15px; letter-spacing: .04em; }
+.panel__scope {
+  margin-left: 10px; font-size: 12px; font-weight: 500; color: var(--text-secondary);
+  letter-spacing: 0;
+}
+.panel__scope .swatch { margin-right: 5px; vertical-align: -1px; }
 .panel__head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* ---------- ボタン ---------- */
@@ -428,4 +440,109 @@ main {
 
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
+}
+
+/* ---------- 複数工程モード ---------- */
+.multi-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; margin-bottom: 12px;
+}
+.multi-head__main { display: flex; align-items: baseline; gap: 8px; }
+.multi-head__time {
+  font-size: clamp(30px, 7vw, 40px); font-weight: 650; line-height: 1;
+  font-variant-numeric: tabular-nums; letter-spacing: -.01em;
+}
+.multi-head__hint { margin: 0; font-size: 12.5px; color: var(--text-secondary); }
+
+.pcards {
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+.pcard {
+  display: grid; gap: 8px; padding: 12px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface-1);
+  border-left: 4px solid var(--pc, var(--series-1));
+}
+.pcard[data-neck="true"] { box-shadow: inset 0 0 0 1px var(--critical); }
+.pcard__head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pcard__name { font-weight: 650; font-size: 14px; }
+.pcard__key {
+  margin-left: auto; font-size: 11px; color: var(--text-muted);
+  border: 1px solid var(--border); border-radius: 5px; padding: 0 5px;
+}
+.badge {
+  font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px;
+  background: var(--critical); color: #fff;
+}
+.badge--muted { background: var(--surface-2); color: var(--text-secondary); }
+.pcard__time {
+  font-size: clamp(30px, 6vw, 38px); font-weight: 650; line-height: 1.05;
+  font-variant-numeric: tabular-nums; letter-spacing: -.01em;
+}
+.pcard__time small { font-size: 14px; font-weight: 500; color: var(--text-secondary); margin-left: 3px; }
+.pcard__elem { font-size: 12.5px; color: var(--text-secondary); min-height: 1.4em; }
+.pcard__btn {
+  appearance: none; cursor: pointer; width: 100%; min-height: 74px;
+  border: none; border-radius: var(--radius-sm);
+  background: var(--pc, var(--series-1)); color: #fff;
+  font-size: 17px; font-weight: 700; letter-spacing: .02em;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, .18);
+  transition: transform .06s ease, filter .12s ease;
+  touch-action: manipulation; -webkit-user-select: none; user-select: none;
+}
+.pcard__btn:hover { filter: brightness(1.07); }
+.pcard__btn:active { transform: translateY(2px); box-shadow: none; }
+.pcard__btn[data-idle="true"] { background: var(--surface-2); color: var(--text-primary); box-shadow: inset 0 0 0 2px var(--border); }
+.pcard__foot {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 12.5px; color: var(--text-secondary);
+}
+.pcard__stat { font-variant-numeric: tabular-nums; }
+.pcard__stat b { color: var(--text-primary); font-weight: 650; }
+.pcard__foot .btn { margin-left: auto; }
+.pcard__foot .btn + .btn { margin-left: 0; }
+.pcard__over { color: var(--critical); font-weight: 650; }
+
+/* ---------- 表示切替 ---------- */
+.viewswitch {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 4px 2px;
+}
+.viewswitch__label { font-size: 12px; color: var(--text-secondary); }
+.viewswitch__chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip {
+  appearance: none; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 6px 13px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface-1);
+  font-size: 13px; font-weight: 600; color: var(--text-secondary);
+}
+.chip:hover { background: var(--surface-2); }
+.chip[aria-selected="true"] {
+  background: var(--text-primary); color: var(--surface-1); border-color: transparent;
+}
+.chip[aria-selected="true"] .swatch { box-shadow: 0 0 0 2px var(--surface-1); }
+
+/* ---------- 設定：工程 ---------- */
+.proc {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px 12px; margin-bottom: 8px;
+  border-left: 4px solid var(--pc, var(--series-1));
+}
+.proc__head { display: flex; align-items: center; gap: 8px; }
+.proc__head input {
+  flex: 1; min-width: 0; padding: 6px 9px; font-weight: 600;
+  border: 1px solid transparent; border-radius: 6px; background: transparent;
+}
+.proc__head input:hover:not(:disabled), .proc__head input:focus { border-color: var(--border); background: var(--surface-1); }
+.proc__body { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--grid); }
+.proc__label { font-size: 12px; color: var(--text-secondary); display: block; margin-bottom: 6px; }
+.proc .elements__add input { padding: 7px 10px; font-size: 13.5px; }
+
+@media (max-width: 560px) {
+  /* 工程が多いときスクロール量を抑える（タップ領域は 60px 以上を維持） */
+  .pcard { gap: 6px; padding: 10px; }
+  .pcard__btn { min-height: 62px; font-size: 16px; }
+  .pcard__time { font-size: 30px; }
 }

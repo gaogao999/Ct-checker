@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
-<meta name="description" content="現場でサイクルタイムを計測・集計するアプリ。要素作業ごとのラップ計測、ばらつき分析、タクトタイム比較、CSV出力に対応。">
+<meta name="description" content="現場でサイクルタイムを計測・集計するアプリ。複数工程の同時計測、要素作業ごとのラップ計測、ばらつき分析、タクトタイム比較、CSV出力に対応。">
 <title>CT Checker – サイクルタイム測定</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>⏱</text></svg>">
 <link rel="stylesheet" href="assets/styles.css">
@@ -29,17 +29,17 @@
 <div id="help" class="help" hidden>
   <h2>使い方</h2>
   <ol>
-    <li><strong>設定</strong>で工程名とタクトタイムを入力します。作業を分けて観測したいときは「要素作業」を追加してください（1つだけなら単純なラップ計測になります）。</li>
-    <li><strong>計測開始</strong>を押し、要素作業が終わるたびに大きなボタンを押します。最後の要素を押した時点で1サイクル完了です。</li>
-    <li>押し間違えたら<strong>直前を取消</strong>、イレギュラーで測り直したいサイクルは<strong>サイクル破棄</strong>で捨てられます。</li>
-    <li>集計値・グラフは自動更新されます。異常値は明細の「除外」にチェックすると統計から外れます。</li>
+    <li><strong>設定</strong>で工程名とタクトタイムを入力します。工程を追加すると<strong>複数工程を同時に計測</strong>でき、1工程だけなら「要素作業」に分けた時間観測ができます。</li>
+    <li><strong>計測開始</strong>を押すと全工程の時計が同時に動きます。各工程のボタンを、その工程が1サイクル終わるたびに押してください。</li>
+    <li>押し間違えたら<strong>取消</strong>、イレギュラーで測り直したいサイクルは<strong>破棄</strong>で捨てられます。</li>
+    <li>集計・グラフ・明細は<strong>表示切替</strong>で「ライン全体」と各工程を行き来できます。異常値は明細の「除外」で統計から外せます。</li>
     <li>データは自動でブラウザに保存されます。<strong>測定を保存</strong>すると名前を付けて残せ、CSV / JSON で書き出せます。</li>
   </ol>
   <h3>キーボード操作</h3>
   <ul class="help__keys">
-    <li><kbd>Space</kbd> / <kbd>Enter</kbd> ラップ（次へ・サイクル完了）</li>
-    <li><kbd>P</kbd> 一時停止 / 再開</li>
-    <li><kbd>Z</kbd> 直前を取消</li>
+    <li><kbd>Space</kbd> / <kbd>Enter</kbd> 1工程目のラップ（次へ・サイクル完了）</li>
+    <li><kbd>1</kbd>…<kbd>6</kbd> その番号の工程のラップ</li>
+    <li><kbd>P</kbd> 一時停止 / 再開　　<kbd>Z</kbd> 直前を取消（1工程目）</li>
   </ul>
 </div>
 
@@ -48,36 +48,52 @@
   <section class="panel panel--measure" id="measure" aria-labelledby="h-measure">
     <h2 class="sr-only" id="h-measure">計測</h2>
 
-    <div class="readout">
-      <div class="readout__main">
-        <span class="readout__label" id="readout-cycle-label">経過（現在のサイクル）</span>
-        <span class="readout__value" id="readout-cycle" aria-labelledby="readout-cycle-label">0.00</span>
-        <span class="readout__unit">秒</span>
+    <!-- 単一工程モード -->
+    <div id="measure-single">
+      <div class="readout">
+        <div class="readout__main">
+          <span class="readout__label" id="readout-cycle-label">経過（現在のサイクル）</span>
+          <span class="readout__value" id="readout-cycle" aria-labelledby="readout-cycle-label">0.00</span>
+          <span class="readout__unit">秒</span>
+        </div>
+        <div class="readout__side">
+          <div class="readout__row">
+            <span class="readout__label">現在の要素</span>
+            <span class="readout__sub"><span id="readout-elem-name">—</span> <span class="readout__sub-num" id="readout-elem">0.00</span></span>
+          </div>
+          <div class="readout__row">
+            <span class="readout__label">直前のサイクル</span>
+            <span class="readout__sub"><span class="readout__sub-num" id="readout-last">—</span> <span id="readout-last-diff" class="delta"></span></span>
+          </div>
+          <div class="readout__row">
+            <span class="readout__label">サイクル数 / 総経過</span>
+            <span class="readout__sub"><span class="readout__sub-num" id="readout-count">0</span> 回 <span class="readout__sep">/</span> <span class="readout__sub-num" id="readout-total">0.00</span></span>
+          </div>
+        </div>
       </div>
-      <div class="readout__side">
-        <div class="readout__row">
-          <span class="readout__label" id="readout-elem-label">現在の要素</span>
-          <span class="readout__sub"><span id="readout-elem-name">—</span> <span class="readout__sub-num" id="readout-elem">0.00</span></span>
-        </div>
-        <div class="readout__row">
-          <span class="readout__label">直前のサイクル</span>
-          <span class="readout__sub"><span class="readout__sub-num" id="readout-last">—</span> <span id="readout-last-diff" class="delta"></span></span>
-        </div>
-        <div class="readout__row">
-          <span class="readout__label">サイクル数 / 総経過</span>
-          <span class="readout__sub"><span class="readout__sub-num" id="readout-count">0</span> 回 <span class="readout__sep">/</span> <span class="readout__sub-num" id="readout-total">0.00</span></span>
-        </div>
-      </div>
+
+      <div class="steps" id="steps" role="list" aria-label="要素作業の進行"></div>
+
+      <button type="button" id="btn-lap" class="lap-btn">
+        <span class="lap-btn__main" id="lap-btn-main">計測開始</span>
+        <span class="lap-btn__sub" id="lap-btn-sub">Space キーでも操作できます</span>
+      </button>
     </div>
 
-    <div class="steps" id="steps" role="list" aria-label="要素作業の進行"></div>
+    <!-- 複数工程モード -->
+    <div id="measure-multi" hidden>
+      <div class="multi-head">
+        <div class="multi-head__main">
+          <span class="readout__label">総経過</span>
+          <span class="multi-head__time" id="multi-total">0.00</span>
+          <span class="readout__unit">秒</span>
+        </div>
+        <p class="multi-head__hint" id="multi-hint">各工程のボタンを、その工程が1サイクル終わるたびに押してください。</p>
+      </div>
+      <div class="pcards" id="pcards"></div>
+    </div>
 
-    <button type="button" id="btn-lap" class="lap-btn">
-      <span class="lap-btn__main" id="lap-btn-main">計測開始</span>
-      <span class="lap-btn__sub" id="lap-btn-sub">Space キーでも操作できます</span>
-    </button>
-
-    <div class="controls">
+    <div class="controls" id="controls">
       <button type="button" id="btn-pause" class="btn" disabled>一時停止</button>
       <button type="button" id="btn-undo" class="btn" disabled>直前を取消</button>
       <button type="button" id="btn-discard" class="btn" disabled>サイクル破棄</button>
@@ -86,11 +102,17 @@
     <p class="status-line" id="status-line" role="status" aria-live="polite">未計測です。設定を確認して「計測開始」を押してください。</p>
   </section>
 
+  <!-- ============ 表示切替 ============ -->
+  <div class="viewswitch" id="viewswitch" hidden>
+    <span class="viewswitch__label">表示</span>
+    <div class="viewswitch__chips" id="viewswitch-chips" role="tablist" aria-label="集計の表示対象"></div>
+  </div>
+
   <!-- ============ 集計 ============ -->
   <section class="panel" aria-labelledby="h-stats">
     <div class="panel__head">
-      <h2 id="h-stats">集計</h2>
-      <div class="panel__head-actions">
+      <h2 id="h-stats">集計<span class="panel__scope" id="scope-stats"></span></h2>
+      <div class="panel__head-actions" id="stats-actions">
         <button type="button" id="btn-outlier" class="btn btn--sm">外れ値を自動除外（±2σ）</button>
         <button type="button" id="btn-include-all" class="btn btn--sm">除外を全解除</button>
       </div>
@@ -101,9 +123,29 @@
 
   <!-- ============ グラフ ============ -->
   <section class="panel" aria-labelledby="h-charts">
-    <div class="panel__head"><h2 id="h-charts">グラフ</h2></div>
+    <div class="panel__head"><h2 id="h-charts">グラフ<span class="panel__scope" id="scope-charts"></span></h2></div>
 
-    <figure class="figure">
+    <!-- ライン全体 -->
+    <figure class="figure" id="fig-balance" hidden>
+      <figcaption>
+        <span class="figure__title">工程別の平均サイクルタイム（山積み表）</span>
+        <span class="figure__sub" id="fig-balance-sub"></span>
+      </figcaption>
+      <div class="legend" id="legend-balance"></div>
+      <div class="chart" id="chart-balance" data-empty="計測すると工程ごとの平均が表示されます"></div>
+    </figure>
+
+    <figure class="figure" id="fig-trend" hidden>
+      <figcaption>
+        <span class="figure__title">工程別サイクルタイムの推移</span>
+        <span class="figure__sub" id="fig-trend-sub"></span>
+      </figcaption>
+      <div class="legend" id="legend-trend"></div>
+      <div class="chart" id="chart-trend" data-empty="2サイクル以上でグラフを表示します"></div>
+    </figure>
+
+    <!-- 工程ごと -->
+    <figure class="figure" id="fig-cycles">
       <figcaption>
         <span class="figure__title">サイクルタイムの推移</span>
         <span class="figure__sub" id="fig1-sub"></span>
@@ -112,8 +154,8 @@
       <div class="chart" id="chart-cycles" data-empty="計測するとここに推移が表示されます"></div>
     </figure>
 
-    <div class="figure-grid">
-      <figure class="figure">
+    <div class="figure-grid" id="figure-grid">
+      <figure class="figure" id="fig-hist">
         <figcaption>
           <span class="figure__title">サイクルタイムの分布</span>
           <span class="figure__sub" id="fig2-sub"></span>
@@ -134,14 +176,24 @@
   <!-- ============ 明細 ============ -->
   <section class="panel" aria-labelledby="h-table">
     <div class="panel__head">
-      <h2 id="h-table">明細</h2>
+      <h2 id="h-table">明細<span class="panel__scope" id="scope-table"></span></h2>
       <div class="panel__head-actions">
         <button type="button" id="btn-csv" class="btn btn--sm">CSV書き出し</button>
         <button type="button" id="btn-json" class="btn btn--sm">JSON書き出し</button>
         <label class="btn btn--sm btn--file">JSON読み込み<input type="file" id="file-json" accept=".json,application/json"></label>
       </div>
     </div>
-    <div class="table-wrap">
+    <div class="table-wrap" id="table-summary-wrap" hidden>
+      <table class="data-table" id="table-summary">
+        <caption class="sr-only">工程ごとの統計</caption>
+      </table>
+    </div>
+    <div class="table-wrap" id="table-matrix-wrap" hidden>
+      <table class="data-table" id="table-matrix">
+        <caption class="sr-only">サイクルごとの工程別サイクルタイム</caption>
+      </table>
+    </div>
+    <div class="table-wrap" id="table-cycles-wrap">
       <table class="data-table" id="table-cycles">
         <caption class="sr-only">サイクルごとの計測結果</caption>
       </table>
@@ -158,11 +210,11 @@
     <div class="panel__head"><h2 id="h-settings">設定</h2></div>
     <div class="form-grid">
       <label class="field">
-        <span class="field__label">工程名 / 品名</span>
-        <input type="text" id="in-title" placeholder="例）A工程 組立">
+        <span class="field__label">ライン名 / 品名</span>
+        <input type="text" id="in-title" placeholder="例）第2ライン A製品">
       </label>
       <label class="field">
-        <span class="field__label">作業者</span>
+        <span class="field__label">観測者</span>
         <input type="text" id="in-operator" placeholder="例）山田">
       </label>
       <label class="field">
@@ -177,13 +229,13 @@
 
     <div class="elements">
       <div class="elements__head">
-        <h3>要素作業</h3>
-        <p class="hint" id="elements-hint">1サイクルを区切って観測したい単位を登録します（最大8個）。未登録なら1サイクル1タップで計測します。</p>
+        <h3>工程</h3>
+        <p class="hint" id="proc-hint"></p>
       </div>
-      <ul class="elements__list" id="elements-list"></ul>
+      <div id="proc-list"></div>
       <div class="elements__add">
-        <input type="text" id="in-element" placeholder="要素作業名（例）部品セット" maxlength="24">
-        <button type="button" id="btn-add-element" class="btn">追加</button>
+        <input type="text" id="in-proc" placeholder="工程名（例）組立2" maxlength="20">
+        <button type="button" id="btn-add-proc" class="btn">工程を追加</button>
       </div>
     </div>
   </section>
