@@ -2,12 +2,13 @@
  * CT Checker — サイクルタイム測定
  * 依存ライブラリなし。ファイルを直接開いても動作します。
  *
- * データモデル
- *   state.processes[]  … 工程。複数登録すると同時計測になる
- *     .elements[]      … 1サイクルを分割する要素作業（1個なら分割なし）
- *     .cycles[]        … { startAcc, marks[], excluded, note, at }
- *   時刻はすべて「計測開始からの累積経過(ms)」。区切り位置だけを持つので
- *   取り消し操作をしても時間のつじつまが合わなくなりません。
+ * 構造
+ *   工程（大工程）        state.groups[]    … 色とまとまりの単位
+ *     ステーション（小工程）state.stations[]  … ストップウォッチと計測の単位
+ *       要素作業           station.elements[] … 1サイクル内の区切り
+ *
+ *   時刻はすべて「そのステーションのストップウォッチの累積経過(ms)」。
+ *   区切り位置だけを持つので、取り消しても時間のつじつまが合わなくなりません。
  * ==========================================================================*/
 (function () {
   'use strict';
@@ -16,7 +17,8 @@
   var SESSION_KEY = 'ct-checker:sessions:v1';
   var THEME_KEY = 'ct-checker:theme';
   var MAX_ELEMENTS = 8;
-  var MAX_PROCESSES = 6;
+  var MAX_GROUPS = 8;      // 配色スロット数と揃える
+  var MAX_STATIONS = 24;
   var SERIES_SLOTS = 8;
 
   /* ------------------------------------------------------------------ 汎用 */
@@ -54,6 +56,16 @@
   }
 
   function seriesVar(i) { return 'var(--series-' + (i % SERIES_SLOTS + 1) + ')'; }
+
+  /** fmtTime が m:ss 表記に切り替わったら「秒」の単位は付けない。 */
+  function unitFor(ms) { return Math.abs(ms) >= 60000 ? '' : '秒'; }
+
+  /** 長めの時間を「12分34秒」で補足する。 */
+  function minSec(ms) {
+    var v = Math.round(ms / 1000);
+    var m = Math.floor(v / 60);
+    return m ? m + '分' + (v % 60) + '秒' : v + '秒';
+  }
   function nowIso() { return new Date().toISOString(); }
 
   function fmtDateTime(iso) {
@@ -77,53 +89,63 @@
   function announce(msg) { $('status-line').textContent = msg; }
 
   /* ------------------------------------------------------------------ 状態 */
-  function newProcess(name) {
+  function newStation(name, groupId) {
     return {
-      id: uid(), name: name || '工程1',
+      id: uid(), groupId: groupId, name: name || 'ステーション',
       elements: [{ id: uid(), name: '1サイクル' }],
       cycles: [], cycleStart: 0, pending: [],
-      accBase: 0,      // この工程のストップウォッチの累積(ms)
+      accBase: 0,      // このステーションのストップウォッチの累積(ms)
       started: false   // 一度でも開始したか
     };
   }
 
   function defaultState() {
+    var g = { id: uid(), name: '工程1' };
     return {
       settings: { title: '', operator: '', memo: '', takt: null },
-      processes: [newProcess('工程1')],
-      accBase: 0,
-      started: false,
+      groups: [g],
+      stations: [newStation('ステーション1', g.id)],
       startedAt: null,
-      view: 'all'   // 'all' またはプロセスID
+      view: 'all',    // 'all' | 'g:<groupId>' | 's:<stationId>'
+      focus: 'all'    // 計測パネルで表示する工程 'all' | <groupId>
     };
   }
 
   var state = defaultState();
-  var RUN = {};                    // 工程ID → 実行中の performance.now()。保存しない
+  var RUN = {};                    // ステーションID → 実行中の performance.now()。保存しない
   var lastTickAt = -1;
 
-  function procs() { return state.processes; }
-  function multi() { return state.processes.length > 1; }
-  /** 工程ごとのストップウォッチ。工程は互いに独立して動く。 */
+  function groups() { return state.groups; }
+  function stations() { return state.stations; }
+  function multi() { return state.stations.length > 1; }
+
+  function groupIndex(g) { return state.groups.indexOf(g); }
+  function groupById(id) {
+    for (var i = 0; i < state.groups.length; i++) if (state.groups[i].id === id) return state.groups[i];
+    return state.groups[0];
+  }
+  function groupOf(st) { return groupById(st.groupId); }
+  function colorOf(st) { return seriesVar(groupIndex(groupOf(st))); }
+  function stationsOf(g) {
+    return state.stations.filter(function (s) { return s.groupId === g.id; });
+  }
+  function stationIndex(st) { return state.stations.indexOf(st); }
+  function stationById(id) {
+    for (var i = 0; i < state.stations.length; i++) if (state.stations[i].id === id) return state.stations[i];
+    return null;
+  }
+
+  /** ステーションごとのストップウォッチ。互いに独立して動く。 */
   function pRunning(p) { return RUN[p.id] != null; }
   function pElapsed(p) {
     return p.accBase + (RUN[p.id] != null ? performance.now() - RUN[p.id] : 0);
   }
-  function anyRunning() { return procs().some(pRunning); }
-  function anyStarted() { return procs().some(function (p) { return p.started; }); }
-  /** 観測全体の経過＝もっとも長く動いた工程の経過。 */
+  function anyRunning() { return stations().some(pRunning); }
+  function anyStarted() { return stations().some(function (p) { return p.started; }); }
+  /** 観測全体の経過＝もっとも長く動いたステーションの経過。 */
   function elapsed() {
-    return procs().reduce(function (m, p) { return Math.max(m, pElapsed(p)); }, 0);
+    return stations().reduce(function (m, p) { return Math.max(m, pElapsed(p)); }, 0);
   }
-
-  /** 集計・グラフ・明細の表示対象。単一工程なら常にその工程。 */
-  function viewAll() { return multi() && state.view === 'all'; }
-  function viewProc() {
-    if (!multi()) return procs()[0];
-    var p = procs().filter(function (x) { return x.id === state.view; })[0];
-    return p || procs()[0];
-  }
-  function procIndex(p) { return procs().indexOf(p); }
 
   function pElements(p) { return p.elements; }
   function pElemCount(p) { return Math.max(1, p.elements.length); }
@@ -142,14 +164,26 @@
   function pTotals(p) { return pActive(p).map(totalOf); }
   function pStats(p) { return stats(pTotals(p)); }
 
-  /** ネック工程（平均が最長の工程）。データが無ければ null。 */
-  function neckProcess() {
+  /** 平均がもっとも長いステーション（ネック）。データが無ければ null。 */
+  function neckOf(list) {
     var best = null, bestV = -1;
-    procs().forEach(function (p) {
+    list.forEach(function (p) {
       var st = pStats(p);
       if (st.n && st.mean > bestV) { bestV = st.mean; best = p; }
     });
     return best;
+  }
+
+  /** 工程（大）の集計：合計工数・ネック・データのあるステーション数。 */
+  function groupSummary(g) {
+    var list = stationsOf(g);
+    var withData = list.filter(function (p) { return pStats(p).n; });
+    var sum = withData.reduce(function (a, p) { return a + pStats(p).mean; }, 0);
+    return {
+      group: g, stations: list, withData: withData,
+      sum: sum, neck: neckOf(list),
+      count: list.length
+    };
   }
 
   /* -------------------------------------------------------------- 統計計算 */
@@ -180,10 +214,10 @@
     return (typeof t === 'number' && isFinite(t) && t > 0) ? t * 1000 : null;
   }
 
-  /** ラインバランス効率＝各工程の平均の合計 ÷（工程数 × ネック工程の平均） */
-  function balanceRate() {
-    var means = procs().map(function (p) { return pStats(p); })
-      .filter(function (s) { return s.n; }).map(function (s) { return s.mean; });
+  /** ラインバランス効率＝平均の合計 ÷（ステーション数 × ネックの平均） */
+  function balanceRate(list) {
+    var means = list.map(pStats).filter(function (s) { return s.n; })
+      .map(function (s) { return s.mean; });
     if (means.length < 2) return null;
     var max = Math.max.apply(null, means);
     var sum = means.reduce(function (a, b) { return a + b; }, 0);
@@ -194,13 +228,15 @@
   var saveTimer = null;
   function snapshot() {
     return {
-      version: 2,
+      version: 3,
       settings: state.settings,
-      processes: state.processes,
+      groups: state.groups,
+      stations: state.stations,
       accBase: elapsed(),
       started: anyStarted(),
       startedAt: state.startedAt,
-      view: state.view
+      view: state.view,
+      focus: state.focus
     };
   }
   function save() {
@@ -238,7 +274,10 @@
     return els.length ? els : [{ id: uid(), name: '1サイクル' }];
   }
 
-  /** v1（単一工程）と v2（複数工程）の両方を受け付ける。 */
+  /**
+   * v1（単一工程）・v2（複数工程・共通の時計）・v3（工程＋ステーション）を受け付ける。
+   * 旧データの「工程」は計測単位なので、そのままステーションとして取り込む。
+   */
   function normalize(d) {
     var s = defaultState();
     var set = d.settings || {};
@@ -247,39 +286,60 @@
     s.settings.memo = String(set.memo || '');
     s.settings.takt = (typeof set.takt === 'number' && set.takt > 0) ? set.takt : null;
 
-    var list = Array.isArray(d.processes) ? d.processes : null;
+    var gs = Array.isArray(d.groups) ? d.groups.filter(function (g) { return g && g.name; }) : [];
+    s.groups = gs.length
+      ? gs.slice(0, MAX_GROUPS).map(function (g) { return { id: g.id || uid(), name: String(g.name) }; })
+      : [{ id: uid(), name: '工程1' }];
+
+    var list = Array.isArray(d.stations) ? d.stations
+      : (Array.isArray(d.processes) ? d.processes : null);
     if (!list) {
-      // v1: settings.elements + cycles を 1 工程として取り込む
+      // v1: settings.elements + cycles を 1 ステーションとして取り込む
       list = [{
-        id: uid(), name: set.title || '工程1',
+        id: uid(), name: set.title || 'ステーション1',
         elements: set.elements, cycles: d.cycles,
         cycleStart: d.cycleStart, pending: d.pending
       }];
     }
-    // 旧データは共通の時計だったので、その値を各工程の時計の初期値として引き継ぐ
     var sharedAcc = typeof d.accBase === 'number' ? d.accBase : 0;
-    s.processes = list.slice(0, MAX_PROCESSES).map(function (p, i) {
+    var ids = s.groups.map(function (g) { return g.id; });
+    s.stations = list.slice(0, MAX_STATIONS).map(function (p, i) {
       var cycles = normCycles(p.cycles);
-      var pending = Array.isArray(p.pending) ? p.pending.slice() : [];
       return {
         id: p.id || uid(),
-        name: String(p.name || ('工程' + (i + 1))),
+        groupId: ids.indexOf(p.groupId) >= 0 ? p.groupId : ids[0],
+        name: String(p.name || ('ステーション' + (i + 1))),
         elements: normElements(p.elements),
         cycles: cycles,
         cycleStart: typeof p.cycleStart === 'number' ? p.cycleStart : 0,
-        pending: pending,
+        pending: Array.isArray(p.pending) ? p.pending.slice() : [],
         accBase: typeof p.accBase === 'number' ? p.accBase : sharedAcc,
         started: typeof p.started === 'boolean' ? p.started : (!!d.started || cycles.length > 0)
       };
     });
-    if (!s.processes.length) s.processes = [newProcess('工程1')];
+    if (!s.stations.length) s.stations = [newStation('ステーション1', s.groups[0].id)];
+    sortStations(s);
 
-    s.accBase = typeof d.accBase === 'number' ? d.accBase : 0;
-    s.started = !!d.started;
     s.startedAt = d.startedAt || null;
-    var ids = s.processes.map(function (p) { return p.id; });
-    s.view = (d.view === 'all' || ids.indexOf(d.view) >= 0) ? d.view : 'all';
+    s.view = validView(s, d.view);
+    s.focus = (d.focus && ids.indexOf(d.focus) >= 0) ? d.focus : 'all';
     return s;
+  }
+
+  function validView(s, v) {
+    if (typeof v !== 'string') return 'all';
+    if (v === 'all') return 'all';
+    var id = v.slice(2);
+    if (v.indexOf('g:') === 0 && s.groups.some(function (g) { return g.id === id; })) return v;
+    if (v.indexOf('s:') === 0 && s.stations.some(function (x) { return x.id === id; })) return v;
+    return 'all';
+  }
+
+  /** 表示順を工程順に揃える（並びがそのまま画面と CSV の順序になる）。 */
+  function sortStations(s) {
+    var order = {};
+    (s || state).groups.forEach(function (g, i) { order[g.id] = i; });
+    (s || state).stations.sort(function (a, b) { return order[a.groupId] - order[b.groupId]; });
   }
 
   function loadSessions() {
@@ -290,8 +350,35 @@
     catch (e) { toast('保存領域がいっぱいです'); }
   }
 
+  /* ------------------------------------------------------------- 表示スコープ */
+  function viewLevel() {
+    if (!multi()) return 'station';
+    if (state.view === 'all') return 'line';
+    return state.view.indexOf('g:') === 0 ? 'group' : 'station';
+  }
+  function viewGroup() {
+    if (state.view.indexOf('g:') === 0) return groupById(state.view.slice(2));
+    if (state.view.indexOf('s:') === 0) {
+      var st = stationById(state.view.slice(2));
+      if (st) return groupOf(st);
+    }
+    return null;
+  }
+  function viewStation() {
+    if (!multi()) return stations()[0];
+    if (state.view.indexOf('s:') === 0) return stationById(state.view.slice(2)) || stations()[0];
+    return stations()[0];
+  }
+  /** 現在のスコープに含まれるステーション */
+  function viewStations() {
+    var lv = viewLevel();
+    if (lv === 'line') return stations();
+    if (lv === 'group') return stationsOf(viewGroup());
+    return [viewStation()];
+  }
+
   /* ------------------------------------------------------------ 計測アクション */
-  /** 工程 p のストップウォッチを開始する（他の工程には影響しない）。 */
+  /** ステーション p のストップウォッチを開始する（他には影響しない）。 */
   function startProc(p) {
     if (pRunning(p)) return;
     if (!p.started) {
@@ -305,7 +392,7 @@
     requestWakeLock();
   }
 
-  /** 工程 p のストップウォッチを止める。止めている間の時間は加算されない。 */
+  /** ステーション p のストップウォッチを止める。止めている間は加算されない。 */
   function stopProc(p) {
     if (!pRunning(p)) return;
     p.accBase = pElapsed(p);
@@ -313,35 +400,24 @@
     if (!anyRunning()) releaseWakeLock();
   }
 
-  function startAll() {
-    procs().forEach(startProc);
-    announce(multi() ? '全工程の計測を開始しました。' : '計測を開始しました。');
-    render(); save();
-  }
-
-  function stopAll() {
-    procs().forEach(stopProc);
-    announce('一時停止中。再開すると現在のサイクルの続きから計測します。');
-    render(); save();
-  }
+  function label(p) { return multi() ? p.name + '：' : ''; }
 
   function toggleProc(p) {
     if (pRunning(p)) {
       stopProc(p);
-      announce((multi() ? p.name + '：' : '') + '一時停止しました。');
+      announce(label(p) + '一時停止しました。');
     } else {
       startProc(p);
-      announce((multi() ? p.name + '：' : '') + (p.cycles.length || p.pending.length ? '再開しました。' : '計測を開始しました。'));
+      announce(label(p) + (p.cycles.length || p.pending.length ? '再開しました。' : '計測を開始しました。'));
     }
     render(); save();
   }
 
-  /** 工程 p のラップ。未開始なら計測開始、一時停止中なら再開。 */
+  /** ステーション p のラップ。止まっていれば開始・再開を兼ねる。 */
   function lap(p) {
     if (!pRunning(p)) {
-      // 止まっている工程はまず動かす（開始・再開ボタンを兼ねる）
       startProc(p);
-      announce((multi() ? p.name + '：' : '') + (p.started && p.cycles.length ? '再開しました。' : '計測を開始しました。'));
+      announce(label(p) + (p.cycles.length ? '再開しました。' : '計測を開始しました。'));
     } else {
       var t = pElapsed(p);
       p.pending.push(t);
@@ -353,13 +429,11 @@
         p.cycleStart = t;
         p.pending = [];
         var c = p.cycles[p.cycles.length - 1];
-        announce((multi() ? p.name + '：' : '') + 'サイクル ' + p.cycles.length +
-          ' 完了 ' + fmtTime(totalOf(c)) + ' 秒');
+        announce(label(p) + 'サイクル ' + p.cycles.length + ' 完了 ' + fmtTime(totalOf(c)) + ' 秒');
       } else {
         var i = p.pending.length - 1;
         var prev = i > 0 ? p.pending[i - 1] : p.cycleStart;
-        announce((multi() ? p.name + '：' : '') + pElements(p)[i].name + ' 完了 ' +
-          fmtTime(p.pending[i] - prev) + ' 秒');
+        announce(label(p) + pElements(p)[i].name + ' 完了 ' + fmtTime(p.pending[i] - prev) + ' 秒');
       }
     }
     if (navigator.vibrate) { try { navigator.vibrate(18); } catch (e) { /* noop */ } }
@@ -367,21 +441,33 @@
     save();
   }
 
-  /** 画面下の共通ボタン：全工程をまとめて開始 / 一時停止 / 再開する。 */
+  /** 画面下の共通ボタン：表示中のステーションをまとめて開始 / 一時停止する。 */
+  function targetsForBulk() {
+    if (!multi()) return stations();
+    return state.focus === 'all' ? stations() : stationsOf(groupById(state.focus));
+  }
+
   function toggleAll() {
-    if (anyRunning()) stopAll();
-    else startAll();
+    var list = targetsForBulk();
+    if (list.some(pRunning)) {
+      list.forEach(stopProc);
+      announce('一時停止中。再開すると現在のサイクルの続きから計測します。');
+    } else {
+      list.forEach(startProc);
+      announce(multi() ? list.length + ' ステーションの計測を開始しました。' : '計測を開始しました。');
+    }
+    render(); save();
   }
 
   function undo(p) {
     if (p.pending.length) {
       p.pending.pop();
-      announce((multi() ? p.name + '：' : '') + '直前の区切りを取り消しました。');
+      announce(label(p) + '直前の区切りを取り消しました。');
     } else if (p.cycles.length) {
       var c = p.cycles.pop();
       p.cycleStart = c.startAcc;
       p.pending = c.marks.slice(0, -1);
-      announce((multi() ? p.name + '：' : '') + 'サイクル ' + (p.cycles.length + 1) + ' を取り消しました。');
+      announce(label(p) + 'サイクル ' + (p.cycles.length + 1) + ' を取り消しました。');
     } else {
       return;
     }
@@ -393,20 +479,19 @@
     if (!p.started) return;
     p.pending = [];
     p.cycleStart = pElapsed(p);
-    announce((multi() ? p.name + '：' : '') + '現在のサイクルを破棄しました。ここから測り直します。');
+    announce(label(p) + '現在のサイクルを破棄しました。ここから測り直します。');
     render();
     save();
   }
 
   function hasData() {
-    return procs().some(function (p) { return p.cycles.length > 0; });
+    return stations().some(function (p) { return p.cycles.length > 0; });
   }
 
   function resetAll() {
     if (hasData() && !confirm('計測データをすべて消去します。よろしいですか？\n（「現在の測定を保存」で残せます）')) return;
     state.startedAt = null;
-    state.accBase = 0;
-    procs().forEach(function (p) {
+    stations().forEach(function (p) {
       p.cycles = []; p.pending = []; p.cycleStart = 0; p.accBase = 0; p.started = false;
     });
     RUN = {};
@@ -431,18 +516,28 @@
   });
 
   /* ============================================================== 描画：計測 */
+  /** 計測パネルに表示するステーション（工程で絞り込む） */
+  function focusStations() {
+    if (state.focus === 'all') return stations();
+    return stationsOf(groupById(state.focus));
+  }
+
   /** 毎フレーム動かす数字だけを更新する。 */
   function renderReadout() {
     if (multi()) {
-      $('multi-total').textContent = fmtTime(elapsed());
-      procs().forEach(function (p, i) {
-        var el = $('ptime-' + i);
+      var tot = elapsed();
+      $('multi-total').textContent = fmtTime(tot);
+      $('multi-unit').textContent = unitFor(tot);
+      focusStations().forEach(function (p) {
+        var el = $('ptime-' + p.id);
         if (el) el.firstChild.nodeValue = p.started ? fmtTime(pCycleElapsed(p)) : '0.00';
       });
       return;
     }
-    var p0 = procs()[0];
-    $('readout-cycle').textContent = p0.started ? fmtTime(pCycleElapsed(p0)) : '0.00';
+    var p0 = stations()[0];
+    var ce = p0.started ? pCycleElapsed(p0) : 0;
+    $('readout-cycle').textContent = fmtTime(ce);
+    $('readout-unit').textContent = unitFor(ce);
     $('readout-elem').textContent = p0.started ? fmtTime(pElementElapsed(p0)) : '0.00';
     $('readout-total').textContent = fmtTime(elapsed());
   }
@@ -451,13 +546,13 @@
     var isMulti = multi();
     $('measure-single').hidden = isMulti;
     $('measure-multi').hidden = !isMulti;
-    if (isMulti) renderCards(); else renderSingleMeasure();
+    if (isMulti) { renderFocusChips(); renderCards(); } else renderSingleMeasure();
     renderControls();
     renderReadout();
   }
 
   function renderSingleMeasure() {
-    var p = procs()[0];
+    var p = stations()[0];
     var els = pElements(p);
     var idx = Math.min(p.pending.length, els.length - 1);
     $('readout-elem-name').textContent = p.started ? els[idx].name : '—';
@@ -492,7 +587,6 @@
       }
     }
 
-    // 要素作業の進行
     var host = $('steps');
     if (els.length < 2) { host.innerHTML = ''; host.hidden = true; }
     else {
@@ -512,7 +606,6 @@
       }).join('');
     }
 
-    // 大ボタン
     var main = $('lap-btn-main'), sub = $('lap-btn-sub'), btn = $('btn-lap');
     if (!p.started) {
       main.textContent = '計測開始';
@@ -520,7 +613,7 @@
       btn.dataset.paused = 'false';
     } else if (!pRunning(p)) {
       main.textContent = '再開';
-      sub.textContent = '一時停止中';
+      sub.textContent = '停止中';
       btn.dataset.paused = 'true';
     } else {
       btn.dataset.paused = 'false';
@@ -535,73 +628,118 @@
     }
   }
 
+  function renderFocusChips() {
+    var host = $('focus-chips');
+    if (groups().length < 2) { host.innerHTML = ''; host.hidden = true; return; }
+    host.hidden = false;
+    var chips = ['<button type="button" class="chip" data-focus="all" aria-pressed="' +
+      (state.focus === 'all') + '">すべて<span class="chip__n">' + stations().length + '</span></button>'];
+    groups().forEach(function (g, i) {
+      var n = stationsOf(g).length;
+      var run = stationsOf(g).filter(pRunning).length;
+      chips.push('<button type="button" class="chip" data-focus="' + esc(g.id) + '" aria-pressed="' +
+        (state.focus === g.id) + '"><span class="swatch" style="background:' + seriesVar(i) + '"></span>' +
+        esc(g.name) + '<span class="chip__n">' + (run ? run + '/' : '') + n + '</span></button>');
+    });
+    host.innerHTML = chips.join('');
+  }
+
   function renderCards() {
     var tt = taktMs();
-    var neck = neckProcess();
-    var html = procs().map(function (p, i) {
-      var st = pStats(p);
-      var els = pElements(p);
-      var last = p.cycles.length ? totalOf(p.cycles[p.cycles.length - 1]) : null;
-      var run = pRunning(p);
-      var label;
-      if (!p.started) label = '▶ 計測開始';
-      else if (!run) label = '▶ 再開';
-      else if (els.length < 2) label = 'サイクル完了';
-      else label = els[Math.min(p.pending.length, els.length - 1)].name + '完了';
+    var neck = neckOf(stations());
+    var visible = focusStations();
+    var shown = [];
+    var html = '';
 
-      var badges = '';
-      if (neck === p && st.n) badges += '<span class="badge">ネック</span>';
-      if (tt && st.n && st.mean > tt) badges += '<span class="badge badge--muted">TT超過</span>';
+    groups().forEach(function (g) {
+      var list = stationsOf(g).filter(function (p) { return visible.indexOf(p) >= 0; });
+      if (!list.length) return;
+      var sm = groupSummary(g);
+      var meta = [];
+      meta.push(list.length + ' ステーション');
+      if (sm.withData.length) {
+        meta.push('合計工数 ' + sec(sm.sum, sm.sum >= 60000 ? 1 : 2) + ' 秒');
+        if (sm.neck) meta.push('ネック ' + esc(sm.neck.name) + ' ' + fmtTime(pStats(sm.neck).mean) + ' 秒');
+      }
+      html += '<div class="pgroup" style="--pc:' + seriesVar(groupIndex(g)) + '">' +
+        (groups().length > 1
+          ? '<div class="pgroup__head"><span class="pgroup__bar"></span>' +
+            '<h3 class="pgroup__name">' + esc(g.name) + '</h3>' +
+            '<span class="pgroup__meta">' + meta.join('　') + '</span></div>'
+          : '') +
+        '<div class="pcards' + (visible.length > 6 ? ' pcards--dense' : '') + '">' +
+        list.map(function (p) { shown.push(p); return cardHtml(p, shown.length, tt, neck); }).join('') +
+        '</div></div>';
+    });
 
-      var runState = run
-        ? '<span class="pcard__run pcard__run--on">計測中</span>'
-        : '<span class="pcard__run">' + (p.started ? '停止中' : '未計測') + '</span>';
-
-      var elemLine = '<div class="pcard__elem">' + (els.length > 1
-        ? (p.started ? '現在のサイクル　' + (p.pending.length + 1) + '/' + els.length + '　' +
-            esc(els[Math.min(p.pending.length, els.length - 1)].name)
-          : '要素 ' + els.length + ' 個')
-        : '現在のサイクルの経過') + '</div>';
-
-      return '<div class="pcard" data-i="' + i + '" data-neck="' + (neck === p && st.n ? 'true' : 'false') +
-        '" data-run="' + (run ? 'true' : 'false') + '" style="--pc:' + seriesVar(i) + '">' +
-        '<div class="pcard__head">' +
-          '<span class="pcard__name">' + esc(p.name) + '</span>' + runState + badges +
-          '<span class="pcard__key">' + (i + 1) + '</span>' +
-        '</div>' +
-        '<div class="pcard__time" id="ptime-' + i + '">0.00<small>秒</small></div>' +
-        elemLine +
-        '<button type="button" class="pcard__btn" data-act="lap" data-i="' + i + '"' +
-          (run ? '' : ' data-idle="true"') + '>' + esc(label) + '</button>' +
-        '<div class="pcard__foot">' +
-          '<span class="pcard__stat">' + st.n + ' 回</span>' +
-          '<span class="pcard__stat">直前 <b>' + (last == null ? '—' : fmtTime(last)) + '</b></span>' +
-          '<span class="pcard__stat">平均 <b>' + (st.n ? fmtTime(st.mean) : '—') + '</b></span>' +
-        '</div>' +
-        '<div class="pcard__actions">' +
-          '<button type="button" class="btn btn--sm" data-act="toggle" data-i="' + i + '"' +
-            (run ? '' : ' disabled') + '>停止</button>' +
-          '<button type="button" class="btn btn--sm" data-act="undo" data-i="' + i + '"' +
-            (p.cycles.length || p.pending.length ? '' : ' disabled') + '>取消</button>' +
-          '<button type="button" class="btn btn--sm" data-act="discard" data-i="' + i + '"' +
-            (p.started ? '' : ' disabled') + '>破棄</button>' +
-        '</div>' +
-      '</div>';
-    }).join('');
     $('pcards').innerHTML = html;
-    var runN = procs().filter(pRunning).length;
+    var runN = stations().filter(pRunning).length;
     $('multi-hint').textContent = anyStarted()
-      ? '各工程のボタン（またはキーボードの数字）を、その工程が1サイクル終わるたびに押してください。' +
-        '（計測中 ' + runN + ' / ' + procs().length + ' 工程）'
-      : '工程ごとに独立したストップウォッチです。1工程ずつ開始しても、下の「全工程を開始」でまとめて動かしても構いません。';
+      ? '各ステーションのボタンを、そのステーションが1サイクル終わるたびに押してください。' +
+        '（計測中 ' + runN + ' / ' + stations().length + '）'
+      : 'ステーションごとに独立したストップウォッチです。1つずつ開始しても、下のボタンでまとめて動かしても構いません。';
+  }
+
+  function cardHtml(p, num, tt, neck) {
+    var st = pStats(p);
+    var els = pElements(p);
+    var last = p.cycles.length ? totalOf(p.cycles[p.cycles.length - 1]) : null;
+    var run = pRunning(p);
+    var lbl;
+    if (!p.started) lbl = '▶ 計測開始';
+    else if (!run) lbl = '▶ 再開';
+    else if (els.length < 2) lbl = 'サイクル完了';
+    else lbl = els[Math.min(p.pending.length, els.length - 1)].name + '完了';
+
+    var badges = '';
+    if (neck === p && st.n) badges += '<span class="badge">ネック</span>';
+    if (tt && st.n && st.mean > tt) badges += '<span class="badge badge--muted">TT超過</span>';
+
+    var runState = run
+      ? '<span class="pcard__run pcard__run--on">計測中</span>'
+      : '<span class="pcard__run">' + (p.started ? '停止中' : '未計測') + '</span>';
+
+    var elemLine = '<div class="pcard__elem">' + (els.length > 1
+      ? (p.started ? '現在のサイクル　' + (p.pending.length + 1) + '/' + els.length + '　' +
+          esc(els[Math.min(p.pending.length, els.length - 1)].name)
+        : '要素 ' + els.length + ' 個')
+      : '現在のサイクルの経過') + '</div>';
+
+    return '<div class="pcard" data-id="' + esc(p.id) + '" data-neck="' + (neck === p && st.n ? 'true' : 'false') +
+      '" data-run="' + (run ? 'true' : 'false') + '" style="--pc:' + colorOf(p) + '">' +
+      '<div class="pcard__head">' +
+        '<span class="pcard__name">' + esc(p.name) + '</span>' + runState + badges +
+        (num <= 9 ? '<span class="pcard__key">' + num + '</span>' : '') +
+      '</div>' +
+      '<div class="pcard__time" id="ptime-' + esc(p.id) + '">0.00<small>秒</small></div>' +
+      elemLine +
+      '<button type="button" class="pcard__btn" data-act="lap" data-id="' + esc(p.id) + '"' +
+        (run ? '' : ' data-idle="true"') + '>' + esc(lbl) + '</button>' +
+      '<div class="pcard__foot">' +
+        '<span class="pcard__stat">' + st.n + ' 回</span>' +
+        '<span class="pcard__stat">直前 <b>' + (last == null ? '—' : fmtTime(last)) + '</b></span>' +
+        '<span class="pcard__stat">平均 <b>' + (st.n ? fmtTime(st.mean) : '—') + '</b></span>' +
+      '</div>' +
+      '<div class="pcard__actions">' +
+        '<button type="button" class="btn btn--sm" data-act="toggle" data-id="' + esc(p.id) + '"' +
+          (run ? '' : ' disabled') + '>停止</button>' +
+        '<button type="button" class="btn btn--sm" data-act="undo" data-id="' + esc(p.id) + '"' +
+          (p.cycles.length || p.pending.length ? '' : ' disabled') + '>取消</button>' +
+        '<button type="button" class="btn btn--sm" data-act="discard" data-id="' + esc(p.id) + '"' +
+          (p.started ? '' : ' disabled') + '>破棄</button>' +
+      '</div>' +
+    '</div>';
   }
 
   function renderControls() {
-    var p0 = procs()[0];
-    var run = anyRunning();
+    var p0 = stations()[0];
+    var list = targetsForBulk();
+    var run = list.some(pRunning);
+    var started = list.some(function (p) { return p.started; });
     var btn = $('btn-pause');
     btn.disabled = false;
-    if (multi()) btn.textContent = run ? '全工程を一時停止' : (anyStarted() ? '全工程を再開' : '全工程を開始');
+    var scope = (multi() && state.focus !== 'all') ? groupById(state.focus).name : '全';
+    if (multi()) btn.textContent = run ? scope + 'ステーションを一時停止' : (started ? scope + 'ステーションを再開' : scope + 'ステーションを開始');
     else btn.textContent = run ? '一時停止' : (p0.started ? '再開' : '計測開始');
     $('btn-undo').hidden = multi();
     $('btn-discard').hidden = multi();
@@ -613,32 +751,53 @@
 
   /* ============================================================== 表示切替 */
   var SCOPE_IDS = ['scope-stats', 'scope-charts', 'scope-table'];
-  function setScope(html) {
-    SCOPE_IDS.forEach(function (id) { $(id).innerHTML = html; });
-  }
+  function setScope(html) { SCOPE_IDS.forEach(function (id) { $(id).innerHTML = html; }); }
 
   function renderViewSwitch() {
     var host = $('viewswitch');
     if (!multi()) {
       host.hidden = true;
-      $('viewswitch-chips').innerHTML = '';
+      $('view-groups').innerHTML = '';
+      $('view-stations').innerHTML = '';
       setScope('');
       return;
     }
     host.hidden = false;
-    var chips = ['<button type="button" class="chip" role="tab" data-view="all" aria-selected="' +
-      (state.view === 'all') + '">ライン全体</button>'];
-    procs().forEach(function (p, i) {
-      chips.push('<button type="button" class="chip" role="tab" data-view="' + esc(p.id) +
-        '" aria-selected="' + (state.view === p.id) + '">' +
-        '<span class="swatch" style="background:' + seriesVar(i) + '"></span>' + esc(p.name) + '</button>');
-    });
-    $('viewswitch-chips').innerHTML = chips.join('');
 
-    setScope(viewAll()
-      ? 'ライン全体（' + procs().length + ' 工程）'
-      : '<span class="swatch" style="background:' + seriesVar(procIndex(viewProc())) + '"></span>' +
-        esc(viewProc().name));
+    var lv = viewLevel();
+    var g = viewGroup();
+    var rows = ['<button type="button" class="chip" data-view="all" aria-selected="' +
+      (state.view === 'all') + '">ライン全体</button>'];
+    groups().forEach(function (gr, i) {
+      rows.push('<button type="button" class="chip" data-view="g:' + esc(gr.id) + '" aria-selected="' +
+        (g === gr) + '"><span class="swatch" style="background:' + seriesVar(i) + '"></span>' +
+        esc(gr.name) + '<span class="chip__n">' + stationsOf(gr).length + '</span></button>');
+    });
+    $('view-groups').innerHTML = rows.join('');
+
+    var sub = $('view-stations');
+    if (!g) { sub.innerHTML = ''; sub.hidden = true; }
+    else {
+      sub.hidden = false;
+      var list = stationsOf(g);
+      var chips = ['<button type="button" class="chip chip--sub" data-view="g:' + esc(g.id) +
+        '" aria-selected="' + (lv === 'group') + '">' + esc(g.name) + ' 全体</button>'];
+      list.forEach(function (p) {
+        chips.push('<button type="button" class="chip chip--sub" data-view="s:' + esc(p.id) +
+          '" aria-selected="' + (lv === 'station' && viewStation() === p) + '">' + esc(p.name) + '</button>');
+      });
+      sub.innerHTML = chips.join('');
+    }
+
+    if (lv === 'line') setScope('ライン全体（' + groups().length + ' 工程・' + stations().length + ' ステーション）');
+    else if (lv === 'group') {
+      setScope('<span class="swatch" style="background:' + seriesVar(groupIndex(g)) + '"></span>' +
+        esc(g.name) + '（' + stationsOf(g).length + ' ステーション）');
+    } else {
+      var p = viewStation();
+      setScope('<span class="swatch" style="background:' + colorOf(p) + '"></span>' +
+        esc(groupOf(p).name) + ' / ' + esc(p.name));
+    }
   }
 
   /* ============================================================== 描画：集計 */
@@ -650,42 +809,49 @@
   }
 
   function renderTiles() {
-    $('stats-actions').hidden = viewAll();
-    if (viewAll()) renderLineTiles(); else renderProcTiles(viewProc());
+    var lv = viewLevel();
+    $('stats-actions').hidden = lv !== 'station';
+    if (lv === 'station') renderProcTiles(viewStation());
+    else renderGroupTiles(lv === 'group' ? viewGroup() : null);
   }
 
-  /** ライン全体：ネック工程とバランスを主役にする。 */
-  function renderLineTiles() {
+  /** ライン全体 / 工程（大）の集計。ネックとバランスを主役にする。 */
+  function renderGroupTiles(g) {
     var host = $('tiles');
+    var list = g ? stationsOf(g) : stations();
     var tt = taktMs();
-    var neck = neckProcess();
+    var neck = neckOf(list);
+    var scope = g ? g.name : 'ライン';
     if (!neck) {
-      host.innerHTML = tile('ネック工程', '—', '', '計測データがありません', 'tile--hero');
+      host.innerHTML = tile('ネックステーション', '—', '', '計測データがありません', 'tile--hero');
       $('takt-bar').innerHTML = '';
       return;
     }
     var neckSt = pStats(neck);
-    var withData = procs().filter(function (p) { return pStats(p).n; });
-    var sumMean = withData.reduce(function (a, p) { return a + pStats(p).mean; }, 0);
+    var withData = list.filter(function (p) { return pStats(p).n; });
+    var sum = withData.reduce(function (a, p) { return a + pStats(p).mean; }, 0);
     var over = tt ? withData.filter(function (p) { return pStats(p).mean > tt; }) : [];
-    var bal = balanceRate();
+    var bal = balanceRate(list);
 
     var html = '';
-    html += tile('ネック工程（最長）', esc(neck.name), '',
-      '平均 ' + fmtTime(neckSt.mean) + ' 秒／ラインの生産ペースを決めます', 'tile--hero');
+    html += tile('ネックステーション', esc(neck.name), '',
+      (g ? '' : esc(groupOf(neck).name) + '／') + '平均 ' + fmtTime(neckSt.mean) +
+      ' 秒・' + scope + 'のペースを決めます', 'tile--hero');
     html += tile('ラインバランス効率', bal == null ? '—' : bal.toFixed(1), bal == null ? '' : '%',
-      bal == null ? '2工程以上で算出' : '100 % に近いほど工数の偏りが小さい');
-    html += tile('工程平均の合計', fmtTime(sumMean), '秒', withData.length + ' 工程の平均を合計');
-    html += tile('工程間の差', fmtTime(neckSt.mean - Math.min.apply(null,
-      withData.map(function (p) { return pStats(p).mean; }))), '秒', '最長工程 − 最短工程');
+      bal == null ? '2ステーション以上で算出' : '100 % に近いほど工数の偏りが小さい');
+    html += tile('合計工数', sec(sum, sum >= 60000 ? 1 : 2), '秒',
+      (sum >= 60000 ? minSec(sum) + '／' : '') + withData.length + ' ステーションの平均を合計');
     if (tt) {
-      html += tile('タクト超過の工程', over.length + ' <small>/ ' + withData.length + '</small>', '工程',
-        over.length ? over.map(function (p) { return esc(p.name); }).join('、') : 'すべてタクト内');
+      html += tile('必要ステーション数', Math.ceil(sum / tt), '', '合計工数 ÷ タクト（理論値）');
+      html += tile('タクト超過', over.length + ' <small>/ ' + withData.length + '</small>', '',
+        over.length ? over.slice(0, 3).map(function (p) { return esc(p.name); }).join('、') +
+          (over.length > 3 ? ' ほか' : '') : 'すべてタクト内');
     } else {
-      html += tile('総観測時間', fmtTime(elapsed()), '秒', 'タクトタイム未設定');
+      html += tile('ステーション数', list.length, '', g ? '' : groups().length + ' 工程');
+      html += tile('総観測時間', fmtTime(elapsed()), unitFor(elapsed()), 'タクトタイム未設定');
     }
     host.innerHTML = html;
-    renderTaktBar(neckSt, tt, 'ネック工程 ' + neck.name);
+    renderTaktBar(neckSt, tt, 'ネック ' + neck.name);
   }
 
   function renderProcTiles(p) {
@@ -712,7 +878,7 @@
       html += tile('タクト超過', over + ' <small>/ ' + s.n + '</small>', '回',
         (s.n ? (over / s.n * 100).toFixed(0) : '0') + ' % のサイクルが超過');
     } else {
-      html += tile('合計観測時間', fmtTime(elapsed()), '秒', 'タクトタイム未設定');
+      html += tile('合計観測時間', fmtTime(elapsed()), unitFor(elapsed()), 'タクトタイム未設定');
     }
     host.innerHTML = html;
     renderTaktBar(s, tt, multi() ? p.name : null);
@@ -743,27 +909,58 @@
 
   /* ============================================================== 描画：明細 */
   function renderTables() {
-    var all = viewAll();
-    $('table-summary-wrap').hidden = !all;
-    $('table-matrix-wrap').hidden = !all;
-    $('table-cycles-wrap').hidden = all;
-    if (all) { renderSummaryTable(); renderMatrixTable(); $('table-elements-wrap').hidden = true; }
-    else renderCycleTable(viewProc());
+    var lv = viewLevel();
+    $('table-groups-wrap').hidden = lv !== 'line';
+    $('table-summary-wrap').hidden = lv === 'station';
+    $('table-matrix-wrap').hidden = lv === 'station';
+    $('table-cycles-wrap').hidden = lv !== 'station';
+    if (lv === 'station') { renderCycleTable(viewStation()); return; }
+    $('table-elements-wrap').hidden = true;
+    if (lv === 'line') renderGroupTable();
+    renderSummaryTable(viewStations());
+    renderMatrixTable(viewStations());
   }
 
-  function renderSummaryTable() {
+  /** 工程（大）ごとのサマリ */
+  function renderGroupTable() {
     var tt = taktMs();
-    var neck = neckProcess();
-    var head = '<thead><tr><th>工程</th><th>サイクル</th><th>平均（秒）</th><th>中央値</th><th>最小</th><th>最大</th>' +
+    var head = '<thead><tr><th>工程</th><th>ステーション</th><th>合計工数（秒）</th>' +
+      '<th>平均（秒）</th><th>ネックステーション</th><th>ネック平均</th>' +
+      (tt ? '<th>必要ST数</th>' : '') + '</tr></thead>';
+    var body = groups().map(function (g, i) {
+      var sm = groupSummary(g);
+      var neckMean = sm.neck ? pStats(sm.neck).mean : 0;
+      var avg = sm.withData.length ? sm.sum / sm.withData.length : 0;
+      return '<tr><td><span class="swatch-cell"><span class="swatch" style="background:' + seriesVar(i) +
+        '"></span>' + esc(g.name) + '</span></td>' +
+        '<td class="num">' + sm.count + '</td>' +
+        '<td class="num">' + (sm.withData.length ? sec(sm.sum) : '—') + '</td>' +
+        '<td class="num">' + (sm.withData.length ? sec(avg) : '—') + '</td>' +
+        '<td>' + (sm.neck ? esc(sm.neck.name) : '—') + '</td>' +
+        '<td class="num">' + (sm.neck ? sec(neckMean) : '—') + '</td>' +
+        (tt ? '<td class="num">' + (sm.withData.length ? Math.ceil(sm.sum / tt) : '—') + '</td>' : '') +
+        '</tr>';
+    }).join('');
+    $('table-groups').innerHTML = head + '<tbody>' + body + '</tbody>';
+  }
+
+  /** ステーションごとのサマリ */
+  function renderSummaryTable(list) {
+    var tt = taktMs();
+    var neck = neckOf(list);
+    var showGroup = viewLevel() === 'line' && groups().length > 1;
+    var head = '<thead><tr>' + (showGroup ? '<th>工程</th>' : '') +
+      '<th>ステーション</th><th>サイクル</th><th>平均（秒）</th><th>中央値</th><th>最小</th><th>最大</th>' +
       '<th>σ</th><th>CV</th>' + (tt ? '<th>タクト差</th><th>判定</th>' : '') + '</tr></thead>';
-    var body = procs().map(function (p, i) {
+    var body = list.map(function (p) {
       var s = pStats(p);
-      var cells = '<td><span class="swatch-cell"><span class="swatch" style="background:' + seriesVar(i) +
-        '"></span>' + esc(p.name) + (neck === p && s.n ? ' <span class="badge">ネック</span>' : '') + '</span></td>';
-      if (!s.n) {
-        cells += '<td class="num">0</td><td colspan="' + (6 + (tt ? 2 : 0)) + '">—</td>';
-        return '<tr>' + cells + '</tr>';
+      var cells = '';
+      if (showGroup) {
+        cells += '<td><span class="swatch-cell"><span class="swatch" style="background:' + colorOf(p) +
+          '"></span>' + esc(groupOf(p).name) + '</span></td>';
       }
+      cells += '<td>' + esc(p.name) + (neck === p && s.n ? ' <span class="badge">ネック</span>' : '') + '</td>';
+      if (!s.n) return '<tr>' + cells + '<td class="num">0</td><td colspan="' + (6 + (tt ? 2 : 0)) + '">—</td></tr>';
       cells += '<td class="num">' + s.n + '</td>' +
         '<td class="num">' + sec(s.mean) + '</td><td class="num">' + sec(s.median) + '</td>' +
         '<td class="num">' + sec(s.min) + '</td><td class="num">' + sec(s.max) + '</td>' +
@@ -778,25 +975,25 @@
     $('table-summary').innerHTML = head + '<tbody>' + body + '</tbody>';
   }
 
-  function renderMatrixTable() {
-    var maxN = Math.max.apply(null, procs().map(function (p) { return p.cycles.length; }).concat([0]));
-    var head = '<thead><tr><th>No</th>' + procs().map(function (p, i) {
-      return '<th><span class="swatch-cell"><span class="swatch" style="background:' + seriesVar(i) +
+  function renderMatrixTable(list) {
+    var maxN = Math.max.apply(null, list.map(function (p) { return p.cycles.length; }).concat([0]));
+    var head = '<thead><tr><th>No</th>' + list.map(function (p) {
+      return '<th><span class="swatch-cell"><span class="swatch" style="background:' + colorOf(p) +
         '"></span>' + esc(p.name) + '（秒）</span></th>';
     }).join('') + '</tr></thead>';
     var body = '';
     if (!maxN) {
-      body = '<tr class="empty-row"><td colspan="' + (procs().length + 1) + '">まだ計測データがありません</td></tr>';
+      body = '<tr class="empty-row"><td colspan="' + (list.length + 1) + '">まだ計測データがありません</td></tr>';
     } else {
       for (var r = 0; r < maxN; r++) {
-        body += '<tr><td>' + (r + 1) + '</td>' + procs().map(function (p) {
+        body += '<tr><td>' + (r + 1) + '</td>' + list.map(function (p) {
           var c = p.cycles[r];
           if (!c) return '<td class="num">—</td>';
           return '<td class="num"' + (c.excluded ? ' style="color:var(--text-muted);text-decoration:line-through"' : '') +
             '>' + sec(totalOf(c)) + '</td>';
         }).join('') + '</tr>';
       }
-      body += '<tr><td>平均</td>' + procs().map(function (p) {
+      body += '<tr><td>平均</td>' + list.map(function (p) {
         var s = pStats(p);
         return '<td class="num">' + (s.n ? sec(s.mean) : '—') + '</td>';
       }).join('') + '</tr>';
@@ -862,7 +1059,6 @@
     }
     $('table-cycles').innerHTML = head + '<tbody>' + body + '</tbody>' + foot;
 
-    // 要素別統計
     var wrap = $('table-elements-wrap');
     if (!multiEl || !act.length) { wrap.hidden = true; $('table-elements').innerHTML = ''; return; }
     wrap.hidden = false;
@@ -884,57 +1080,79 @@
   /* ========================================================== 描画：設定・保存 */
   function renderProcList() {
     var locked = anyStarted() || hasData();
-    var list = procs();
-    $('proc-list').innerHTML = list.map(function (p, i) {
-      var els = pElements(p);
-      var elemHtml = els.map(function (e, j) {
-        return '<li class="elements__item">' +
-          '<span class="elements__index">' + (j + 1) + '</span>' +
-          '<span class="swatch" style="background:' + seriesVar(j) + '"></span>' +
-          '<input type="text" value="' + esc(e.name) + '" data-act="rename-element" data-p="' + i +
-            '" data-i="' + j + '" maxlength="24" aria-label="' + esc(p.name) + ' の要素作業 ' + (j + 1) + '"' +
-            (locked ? ' disabled' : '') + '>' +
-          (locked ? '' : '<button type="button" class="btn btn--icon" data-act="del-element" data-p="' + i +
-            '" data-i="' + j + '" aria-label="要素作業を削除">✕</button>') +
-          '</li>';
+    var host = $('proc-list');
+    host.innerHTML = groups().map(function (g, gi) {
+      var list = stationsOf(g);
+      var rows = list.map(function (p) {
+        var els = pElements(p);
+        return '<li class="stn">' +
+          '<div class="stn__head">' +
+            '<span class="swatch" style="background:' + seriesVar(gi) + '"></span>' +
+            '<input type="text" value="' + esc(p.name) + '" data-act="rename-station" data-id="' + esc(p.id) +
+              '" maxlength="24" aria-label="ステーション名"' + (locked ? ' disabled' : '') + '>' +
+            (locked || list.length < 2 ? '' :
+              '<button type="button" class="btn btn--icon" data-act="del-station" data-id="' + esc(p.id) +
+              '" aria-label="ステーションを削除">✕</button>') +
+          '</div>' +
+          '<details class="stn__els"' + (els.length > 1 ? ' open' : '') + '>' +
+            '<summary>要素作業 ' + els.length + ' 個' + (els.length > 1 ? '' : '（分割なし）') + '</summary>' +
+            '<ul class="elements__list">' + els.map(function (e, j) {
+              return '<li class="elements__item">' +
+                '<span class="elements__index">' + (j + 1) + '</span>' +
+                '<input type="text" value="' + esc(e.name) + '" data-act="rename-element" data-id="' + esc(p.id) +
+                  '" data-i="' + j + '" maxlength="24" aria-label="要素作業名"' + (locked ? ' disabled' : '') + '>' +
+                (locked ? '' : '<button type="button" class="btn btn--icon" data-act="del-element" data-id="' +
+                  esc(p.id) + '" data-i="' + j + '" aria-label="要素作業を削除">✕</button>') +
+                '</li>';
+            }).join('') + '</ul>' +
+            (locked ? '' :
+              '<div class="elements__add">' +
+                '<input type="text" data-act="new-element" data-id="' + esc(p.id) +
+                  '" placeholder="要素作業を追加" maxlength="24"' + (els.length >= MAX_ELEMENTS ? ' disabled' : '') + '>' +
+                '<button type="button" class="btn btn--sm" data-act="add-element" data-id="' + esc(p.id) + '"' +
+                  (els.length >= MAX_ELEMENTS ? ' disabled' : '') + '>追加</button>' +
+              '</div>') +
+          '</details>' +
+        '</li>';
       }).join('');
 
-      return '<div class="proc" style="--pc:' + seriesVar(i) + '">' +
+      return '<div class="proc" style="--pc:' + seriesVar(gi) + '">' +
         '<div class="proc__head">' +
-          '<span class="elements__index">' + (i + 1) + '</span>' +
-          '<input type="text" value="' + esc(p.name) + '" data-act="rename-proc" data-p="' + i +
-            '" maxlength="20" aria-label="工程 ' + (i + 1) + ' の名前"' + (locked ? ' disabled' : '') + '>' +
-          (locked || list.length < 2 ? '' :
-            '<button type="button" class="btn btn--icon" data-act="del-proc" data-p="' + i +
+          '<span class="elements__index">' + (gi + 1) + '</span>' +
+          '<input type="text" value="' + esc(g.name) + '" data-act="rename-group" data-id="' + esc(g.id) +
+            '" maxlength="20" aria-label="工程名"' + (locked ? ' disabled' : '') + '>' +
+          '<span class="proc__count">' + list.length + ' ST</span>' +
+          (locked || groups().length < 2 ? '' :
+            '<button type="button" class="btn btn--icon" data-act="del-group" data-id="' + esc(g.id) +
             '" aria-label="工程を削除">✕</button>') +
         '</div>' +
         '<div class="proc__body">' +
-          '<span class="proc__label">要素作業（' + els.length + '）— 1個なら1タップで1サイクル</span>' +
-          '<ul class="elements__list">' + elemHtml + '</ul>' +
+          '<ul class="stn__list">' + rows + '</ul>' +
           (locked ? '' :
             '<div class="elements__add">' +
-              '<input type="text" data-act="new-element" data-p="' + i +
-                '" placeholder="要素作業名を追加（例）部品セット" maxlength="24"' +
-                (els.length >= MAX_ELEMENTS ? ' disabled' : '') + '>' +
-              '<button type="button" class="btn" data-act="add-element" data-p="' + i + '"' +
-                (els.length >= MAX_ELEMENTS ? ' disabled' : '') + '>追加</button>' +
+              '<input type="text" data-act="new-station" data-id="' + esc(g.id) +
+                '" placeholder="ステーションを追加（例）ST3 検査" maxlength="24"' +
+                (stations().length >= MAX_STATIONS ? ' disabled' : '') + '>' +
+              '<button type="button" class="btn" data-act="add-station" data-id="' + esc(g.id) + '"' +
+                (stations().length >= MAX_STATIONS ? ' disabled' : '') + '>ステーション追加</button>' +
             '</div>') +
         '</div>' +
       '</div>';
     }).join('');
 
-    $('in-proc').disabled = locked || list.length >= MAX_PROCESSES;
-    $('btn-add-proc').disabled = locked || list.length >= MAX_PROCESSES;
+    $('in-proc').disabled = locked || groups().length >= MAX_GROUPS;
+    $('btn-add-proc').disabled = locked || groups().length >= MAX_GROUPS;
     var hint = $('proc-hint');
     if (locked) {
-      hint.textContent = '計測データがあるため工程構成は変更できません。変更するには「リセット」してください。';
+      hint.textContent = '計測データがあるため構成は変更できません。変更するには「リセット」してください。';
       hint.className = 'hint hint--warn';
-    } else if (list.length >= MAX_PROCESSES) {
-      hint.textContent = '工程は最大 ' + MAX_PROCESSES + ' 個までです。';
+    } else if (stations().length >= MAX_STATIONS) {
+      hint.textContent = 'ステーションは全体で最大 ' + MAX_STATIONS + ' 個までです。';
       hint.className = 'hint hint--warn';
     } else {
-      hint.textContent = '工程を2つ以上登録すると、1画面で同時に計測してネック工程を比較できます。' +
-        '1工程だけなら要素作業に分けた時間観測になります。';
+      hint.textContent = '工程（大工程）でまとめ、その中のステーション（小工程）ごとに計測します。' +
+        'グラフの色は工程ごと、ストップウォッチはステーションごとです（工程 最大' + MAX_GROUPS +
+        '・ステーション 最大' + MAX_STATIONS + '）。';
       hint.className = 'hint';
     }
   }
@@ -942,21 +1160,23 @@
   function renderSessions() {
     var list = loadSessions();
     var t = $('table-sessions');
-    var head = '<thead><tr><th>名前</th><th>保存日時</th><th>工程</th><th>サイクル</th><th>ネック工程の平均（秒）</th><th>操作</th></tr></thead>';
+    var head = '<thead><tr><th>名前</th><th>保存日時</th><th>工程</th><th>ST</th><th>サイクル</th>' +
+      '<th>ネックの平均（秒）</th><th>操作</th></tr></thead>';
     if (!list.length) {
-      t.innerHTML = head + '<tbody><tr class="empty-row"><td colspan="6">保存した測定はありません</td></tr></tbody>';
+      t.innerHTML = head + '<tbody><tr class="empty-row"><td colspan="7">保存した測定はありません</td></tr></tbody>';
       return;
     }
     var body = list.map(function (s) {
       var st = normalize(s.data || s);
       var total = 0, neckMean = 0, neckName = '—';
-      st.processes.forEach(function (p) {
+      st.stations.forEach(function (p) {
         total += p.cycles.length;
         var ps = stats(p.cycles.filter(function (c) { return !c.excluded; }).map(totalOf));
         if (ps.n && ps.mean > neckMean) { neckMean = ps.mean; neckName = p.name; }
       });
       return '<tr><td>' + esc(s.name) + '</td><td>' + fmtDateTime(s.savedAt) + '</td>' +
-        '<td class="num">' + st.processes.length + '</td><td class="num">' + total + '</td>' +
+        '<td class="num">' + st.groups.length + '</td><td class="num">' + st.stations.length + '</td>' +
+        '<td class="num">' + total + '</td>' +
         '<td class="num">' + (neckMean ? esc(neckName) + ' ' + sec(neckMean) : '—') + '</td>' +
         '<td><button type="button" class="btn btn--sm" data-act="load-session" data-id="' + esc(s.id) + '">読込</button> ' +
         '<button type="button" class="btn btn--sm" data-act="csv-session" data-id="' + esc(s.id) + '">CSV</button> ' +
@@ -972,7 +1192,6 @@
     $('in-takt').value = state.settings.takt == null ? '' : state.settings.takt;
   }
 
-  /* ------------------------------------------------------------ 全体レンダリング */
   function render() {
     renderMeasure();
     renderViewSwitch();
@@ -1029,6 +1248,7 @@
       '" font-size="' + (opts.size || 11) + '" text-anchor="' + (opts.anchor || 'start') +
       '" dominant-baseline="' + (opts.baseline || 'auto') + '"' +
       (opts.weight ? ' font-weight="' + opts.weight + '"' : '') +
+      (opts.rotate ? ' transform="rotate(' + opts.rotate + ' ' + nn(x) + ' ' + nn(y) + ')"' : '') +
       (opts.tabular ? ' style="font-variant-numeric:tabular-nums"' : '') +
       '>' + esc(s) + '</text>';
   }
@@ -1044,11 +1264,27 @@
     host.innerHTML = '';
   }
 
-  /* -------------------------------------------- ① 工程別の平均（山積み表） */
-  function renderBalanceChart() {
+  function tipStation(p, tt, extra) {
+    var s = pStats(p);
+    if (!s.n) {
+      return '<strong>' + esc(p.name) + '</strong><div class="tt-row"><span class="tt-key">状態</span><span>未計測</span></div>';
+    }
+    return '<strong>' + esc(p.name) + '</strong>' +
+      (multi() ? '<div class="tt-row"><span class="tt-key">工程</span><span>' + esc(groupOf(p).name) + '</span></div>' : '') +
+      '<div class="tt-row"><span class="tt-key">平均</span><span class="tt-val">' + fmtTime(s.mean) + ' 秒</span></div>' +
+      '<div class="tt-row"><span class="tt-key">最小 / 最大</span><span class="tt-val">' + fmtTime(s.min) + ' / ' + fmtTime(s.max) + '</span></div>' +
+      '<div class="tt-row"><span class="tt-key">σ / CV</span><span class="tt-val">' + fmtTime(s.sd) + ' / ' + s.cv.toFixed(1) + ' %</span></div>' +
+      '<div class="tt-row"><span class="tt-key">サイクル数</span><span class="tt-val">' + s.n + ' 回</span></div>' +
+      (tt ? '<div class="tt-row"><span class="tt-key">タクト差</span><span class="tt-val" style="color:' +
+        (s.mean > tt ? 'var(--critical)' : 'var(--success-text)') + '">' +
+        (s.mean > tt ? '▲ +' : '') + fmtTime(s.mean - tt) + '</span></div>' : '') +
+      (extra || '');
+  }
+
+  /* -------------------------------------------- ① ステーション別の平均（山積み表） */
+  function renderBalanceChart(list, showGroups) {
     var host = $('chart-balance');
-    var withData = procs().filter(function (p) { return pStats(p).n; });
-    if (!withData.length) {
+    if (!list.some(function (p) { return pStats(p).n; })) {
       markEmpty('chart-balance');
       $('legend-balance').innerHTML = ''; $('fig-balance-sub').textContent = '';
       return;
@@ -1056,18 +1292,22 @@
     host.dataset.state = '';
 
     var tt = taktMs();
-    var neck = neckProcess();
-    var rows = procs().map(function (p, i) { return { p: p, i: i, st: pStats(p) }; });
+    var neck = neckOf(list);
+    var rows = list.map(function (p) { return { p: p, st: pStats(p) }; });
     var dataMax = Math.max.apply(null, rows.map(function (r) { return r.st.max || 0; }).concat(tt ? [tt] : []));
     var scale = niceScale(dataMax / 1000 * 1.02, 5);
     var yMax = scale.max * 1000;
 
-    var w = chartWidth(host), h = 300;
-    var padL = 48, padR = 66, padT = 34, padB = 46;   // 上端はラベル帯として空ける
-    var plotW = w - padL - padR, plotH = h - padT - padB;
+    var w = chartWidth(host);
+    var padL = 48, padR = 66, padT = 34, plotH = 200;
+    var plotW = w - padL - padR;
+    var band = plotW / rows.length;
+    var rotate = band < 46;
+    var padB = (rotate ? 76 : 44) + (showGroups ? 26 : 0);
+    var h = padT + plotH + padB;
     var yOf = function (v) { return padT + plotH - (v / yMax) * plotH; };
 
-    var s = ['<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="工程ごとの平均サイクルタイム">'];
+    var s = ['<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="ステーションごとの平均サイクルタイム">'];
     scale.ticks.forEach(function (t) {
       var y = yOf(t * 1000);
       s.push('<line x1="' + padL + '" y1="' + nn(y) + '" x2="' + nn(padL + plotW) + '" y2="' + nn(y) +
@@ -1077,53 +1317,74 @@
     s.push('<line x1="' + padL + '" y1="' + nn(padT + plotH) + '" x2="' + nn(padL + plotW) +
       '" y2="' + nn(padT + plotH) + '" stroke="var(--axis)" stroke-width="1" />');
 
-    var band = plotW / rows.length;
-    var barW = Math.min(56, Math.max(10, band * 0.5));
+    var barW = Math.min(24, Math.max(4, band * 0.62));
+    var labelAll = band >= 34;
     rows.forEach(function (r, k) {
       var cx = padL + band * (k + 0.5);
       var x = cx - barW / 2;
       if (r.st.n) {
         var yTop = yOf(r.st.mean);
         s.push('<path d="' + topRounded(x, yTop, barW, padT + plotH - yTop, 4) +
-          '" fill="' + seriesVar(r.i) + '" />');
-        // 最小〜最大のひげ
-        if (r.st.max > r.st.min) {
+          '" fill="' + colorOf(r.p) + '" />');
+        if (r.st.max > r.st.min && barW >= 8) {
           var y1 = yOf(r.st.min), y2 = yOf(r.st.max);
           s.push('<line x1="' + nn(cx) + '" y1="' + nn(y1) + '" x2="' + nn(cx) + '" y2="' + nn(y2) +
             '" stroke="var(--surface-1)" stroke-width="4" />');
           s.push('<line x1="' + nn(cx) + '" y1="' + nn(y1) + '" x2="' + nn(cx) + '" y2="' + nn(y2) +
             '" stroke="var(--text-secondary)" stroke-width="1.5" />');
           [y1, y2].forEach(function (yy) {
-            s.push('<line x1="' + nn(cx - 5) + '" y1="' + nn(yy) + '" x2="' + nn(cx + 5) + '" y2="' + nn(yy) +
+            s.push('<line x1="' + nn(cx - 4) + '" y1="' + nn(yy) + '" x2="' + nn(cx + 4) + '" y2="' + nn(yy) +
               '" stroke="var(--text-secondary)" stroke-width="1.5" />');
           });
         }
         var labelY = Math.max(yOf(r.st.max) - 10, 24);
-        s.push(txt(cx, labelY, sec(r.st.mean),
-          { anchor: 'middle', fill: 'var(--text-primary)', size: 12, weight: 600, tabular: true }));
+        if (labelAll || neck === r.p) {
+          s.push(txt(cx, labelY, sec(r.st.mean),
+            { anchor: 'middle', fill: 'var(--text-primary)', size: 12, weight: 600, tabular: true }));
+        }
         if (neck === r.p) {
           s.push(txt(cx, labelY - 15, '▲ ネック',
             { anchor: 'middle', fill: 'var(--critical)', size: 11, weight: 700 }));
         }
-      } else {
+      } else if (band >= 34) {
         s.push(txt(cx, padT + plotH - 8, '未計測', { anchor: 'middle' }));
       }
-      s.push(txt(cx, padT + plotH + 18, clipName(r.p.name, Math.max(4, Math.floor(band / 13))),
-        { anchor: 'middle', fill: 'var(--text-primary)', size: 12 }));
+
+      // ステーション名
+      if (rotate) {
+        s.push(txt(cx, padT + plotH + 14, clipName(r.p.name, 9),
+          { anchor: 'end', fill: 'var(--text-primary)', size: 11, rotate: -45 }));
+      } else {
+        s.push(txt(cx, padT + plotH + 18, clipName(r.p.name, Math.max(4, Math.floor(band / 13))),
+          { anchor: 'middle', fill: 'var(--text-primary)', size: 12 }));
+      }
 
       var key = 'b-' + k;
-      TIPS[key] = '<strong>' + esc(r.p.name) + '</strong>' + (r.st.n
-        ? '<div class="tt-row"><span class="tt-key">平均</span><span class="tt-val">' + fmtTime(r.st.mean) + ' 秒</span></div>' +
-          '<div class="tt-row"><span class="tt-key">最小 / 最大</span><span class="tt-val">' + fmtTime(r.st.min) + ' / ' + fmtTime(r.st.max) + '</span></div>' +
-          '<div class="tt-row"><span class="tt-key">σ / CV</span><span class="tt-val">' + fmtTime(r.st.sd) + ' / ' + r.st.cv.toFixed(1) + ' %</span></div>' +
-          '<div class="tt-row"><span class="tt-key">サイクル数</span><span class="tt-val">' + r.st.n + ' 回</span></div>' +
-          (tt ? '<div class="tt-row"><span class="tt-key">タクト差</span><span class="tt-val" style="color:' +
-            (r.st.mean > tt ? 'var(--critical)' : 'var(--success-text)') + '">' +
-            (r.st.mean > tt ? '▲ +' : '') + fmtTime(r.st.mean - tt) + '</span></div>' : '')
-        : '<div class="tt-row"><span class="tt-key">状態</span><span>未計測</span></div>');
+      TIPS[key] = tipStation(r.p, tt);
       s.push('<rect class="hit" x="' + nn(padL + band * k) + '" y="' + padT + '" width="' + nn(band) +
         '" height="' + nn(plotH) + '" fill="transparent" data-tip="' + key + '" />');
     });
+
+    // 工程（大）の区切りと見出し
+    if (showGroups) {
+      var y0 = padT + plotH + (rotate ? 60 : 30);
+      var idx = 0;
+      groups().forEach(function (g, gi) {
+        var members = rows.filter(function (r) { return r.p.groupId === g.id; });
+        if (!members.length) return;
+        var from = padL + band * idx;
+        var to = from + band * members.length;
+        idx += members.length;
+        s.push('<line x1="' + nn(from + 3) + '" y1="' + nn(y0) + '" x2="' + nn(to - 3) + '" y2="' + nn(y0) +
+          '" stroke="' + seriesVar(gi) + '" stroke-width="3" stroke-linecap="round" />');
+        s.push(txt((from + to) / 2, y0 + 15, clipName(g.name, Math.max(4, Math.floor((to - from) / 12))),
+          { anchor: 'middle', fill: 'var(--text-secondary)', size: 11, weight: 600 }));
+        if (to < padL + plotW - 1) {
+          s.push('<line x1="' + nn(to) + '" y1="' + padT + '" x2="' + nn(to) + '" y2="' + nn(padT + plotH) +
+            '" stroke="var(--grid)" stroke-width="1" />');
+        }
+      });
+    }
 
     if (tt) {
       var yt = yOf(tt);
@@ -1135,18 +1396,108 @@
     s.push('</svg>');
     host.innerHTML = s.join('');
 
-    var lg = ['<span class="legend__item">横棒＝平均、細線＝最小〜最大</span>'];
+    var lg = [];
+    if (showGroups && groups().length > 1) {
+      groups().forEach(function (g, gi) {
+        if (!stationsOf(g).length) return;
+        lg.push('<span class="legend__item"><span class="legend__swatch" style="background:' + seriesVar(gi) +
+          '"></span>' + esc(g.name) + '</span>');
+      });
+    }
+    lg.push('<span class="legend__item">棒＝平均、細線＝最小〜最大</span>');
     if (tt) lg.push('<span class="legend__item" style="color:var(--critical)"><span class="legend__swatch legend__swatch--dash"></span><span style="color:var(--text-secondary)">タクトタイム</span></span>');
-    lg.push('<span class="legend__item"><span style="color:var(--critical)">▲</span>ネック工程（最長）</span>');
+    lg.push('<span class="legend__item"><span style="color:var(--critical)">▲</span>ネック（最長）</span>');
     $('legend-balance').innerHTML = lg.join('');
-    var bal = balanceRate();
-    $('fig-balance-sub').textContent = '縦軸：秒' + (bal == null ? '' : '　ラインバランス効率 ' + bal.toFixed(1) + ' %');
+    var bal = balanceRate(list);
+    $('fig-balance-sub').textContent = '縦軸：秒　' + list.length + ' ステーション' +
+      (bal == null ? '' : '　ラインバランス効率 ' + bal.toFixed(1) + ' %') +
+      (labelAll ? '' : '　※値はネックのみ表示（明細表に全ステーション）');
   }
 
-  /* -------------------------------------------- ② 工程別サイクルタイム推移 */
-  function renderTrendChart() {
+  /* -------------------------------------------- ② 工程（大）別の工数内訳 */
+  function renderGroupStackChart() {
+    var host = $('chart-groups');
+    var sums = groups().map(function (g) { return groupSummary(g); });
+    if (!sums.some(function (sm) { return sm.withData.length; })) {
+      markEmpty('chart-groups');
+      $('legend-groups').innerHTML = ''; $('fig-groups-sub').textContent = '';
+      return;
+    }
+    host.dataset.state = '';
+
+    var tt = taktMs();
+    var dataMax = Math.max.apply(null, sums.map(function (sm) { return sm.sum; }));
+    var scale = niceScale(dataMax / 1000 * 1.02, 5);
+    var yMax = scale.max * 1000;
+
+    var w = chartWidth(host), h = 300;
+    var padL = 48, padR = 24, padT = 30, padB = 46;
+    var plotW = w - padL - padR, plotH = h - padT - padB;
+    var yOf = function (v) { return padT + plotH - (v / yMax) * plotH; };
+
+    var s = ['<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="工程ごとの工数内訳">'];
+    scale.ticks.forEach(function (t) {
+      var y = yOf(t * 1000);
+      s.push('<line x1="' + padL + '" y1="' + nn(y) + '" x2="' + nn(padL + plotW) + '" y2="' + nn(y) +
+        '" stroke="var(--grid)" stroke-width="1" />');
+      s.push(txt(padL - 8, y, tickLabel(t), { anchor: 'end', baseline: 'middle', tabular: true }));
+    });
+    s.push('<line x1="' + padL + '" y1="' + nn(padT + plotH) + '" x2="' + nn(padL + plotW) +
+      '" y2="' + nn(padT + plotH) + '" stroke="var(--axis)" stroke-width="1" />');
+
+    var band = plotW / sums.length;
+    var barW = Math.min(64, Math.max(12, band * 0.5));
+    sums.forEach(function (sm, gi) {
+      var cx = padL + band * (gi + 0.5);
+      var x = cx - barW / 2;
+      var cum = 0;
+      var segs = sm.withData.map(function (p) { return { p: p, v: pStats(p).mean }; });
+      segs.forEach(function (seg, j) {
+        var yTop = yOf(cum + seg.v);
+        var yBot = yOf(cum);
+        var isTop = j === segs.length - 1;
+        var hh = yBot - yTop - (isTop ? 0 : 2);
+        if (hh < 1) hh = 1;
+        if (isTop) s.push('<path d="' + topRounded(x, yTop, barW, hh, 4) + '" fill="' + seriesVar(gi) + '" />');
+        else s.push('<rect x="' + nn(x) + '" y="' + nn(yTop + 2) + '" width="' + nn(barW) +
+          '" height="' + nn(hh) + '" fill="' + seriesVar(gi) + '" />');
+        if (hh >= 16 && barW >= 44) {
+          s.push(txt(cx, yTop + hh / 2 + 4, clipName(seg.p.name, Math.floor(barW / 12)),
+            { anchor: 'middle', fill: '#fff', size: 11 }));
+        }
+        cum += seg.v;
+      });
+      if (sm.sum > 0) {
+        s.push(txt(cx, yOf(sm.sum) - 8, sec(sm.sum),
+          { anchor: 'middle', fill: 'var(--text-primary)', size: 12, weight: 600, tabular: true }));
+      }
+      s.push(txt(cx, padT + plotH + 18, clipName(sm.group.name, Math.max(4, Math.floor(band / 13))),
+        { anchor: 'middle', fill: 'var(--text-primary)', size: 12 }));
+
+      TIPS['g-' + gi] = '<strong>' + esc(sm.group.name) + '</strong>' +
+        segs.map(function (seg) {
+          return '<div class="tt-row"><span class="tt-key">' + esc(seg.p.name) + '</span><span class="tt-val">' +
+            fmtTime(seg.v) + '</span></div>';
+        }).join('') +
+        '<div class="tt-row"><span class="tt-key">合計工数</span><span class="tt-val">' + fmtTime(sm.sum) + ' 秒</span></div>' +
+        (tt ? '<div class="tt-row"><span class="tt-key">必要ST数</span><span class="tt-val">' +
+          Math.ceil(sm.sum / tt) + ' / 実 ' + sm.count + '</span></div>' : '');
+      s.push('<rect class="hit" x="' + nn(padL + band * gi) + '" y="' + padT + '" width="' + nn(band) +
+        '" height="' + nn(plotH) + '" fill="transparent" data-tip="g-' + gi + '" />');
+    });
+    s.push('</svg>');
+    host.innerHTML = s.join('');
+    $('legend-groups').innerHTML = '<span class="legend__item">積み上げの1区切り＝1ステーションの平均</span>';
+    $('fig-groups-sub').textContent = '縦軸：秒（工程内のステーション平均を合計＝その工程の工数）';
+  }
+
+  /* -------------------------------------------- ③ ステーション別の推移 */
+  function renderTrendChart(full) {
     var host = $('chart-trend');
-    var maxN = Math.max.apply(null, procs().map(function (p) { return p.cycles.length; }).concat([0]));
+    var dropped = Math.max(0, full.length - SERIES_SLOTS);
+    var list = full.slice(0, SERIES_SLOTS);   // 線は色で識別するため配色スロット数で打ち切る
+    var lineColor = function (p) { return seriesVar(list.indexOf(p)); };
+    var maxN = Math.max.apply(null, list.map(function (p) { return p.cycles.length; }).concat([0]));
     if (maxN < 2) {
       markEmpty('chart-trend'); $('legend-trend').innerHTML = ''; $('fig-trend-sub').textContent = '';
       return;
@@ -1155,7 +1506,7 @@
 
     var tt = taktMs();
     var all = [];
-    procs().forEach(function (p) { p.cycles.forEach(function (c) { all.push(totalOf(c)); }); });
+    list.forEach(function (p) { p.cycles.forEach(function (c) { all.push(totalOf(c)); }); });
     var dataMax = Math.max.apply(null, all.concat(tt ? [tt] : []));
     var scale = niceScale(dataMax / 1000 * 1.05, 5);
     var yMax = scale.max * 1000;
@@ -1166,7 +1517,7 @@
     var yOf = function (v) { return padT + plotH - (v / yMax) * plotH; };
     var xOf = function (i) { return maxN < 2 ? padL + plotW / 2 : padL + (i / (maxN - 1)) * plotW; };
 
-    var s = ['<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="工程別サイクルタイムの推移">'];
+    var s = ['<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="ステーション別サイクルタイムの推移">'];
     scale.ticks.forEach(function (t) {
       var y = yOf(t * 1000);
       s.push('<line x1="' + padL + '" y1="' + nn(y) + '" x2="' + nn(padL + plotW) + '" y2="' + nn(y) +
@@ -1184,28 +1535,32 @@
         { baseline: 'middle', fill: 'var(--text-secondary)', size: 11, tabular: true }));
     }
 
-    procs().forEach(function (p, pi) {
+    // 同じ工程内は同色になるため、線の濃淡ではなく凡例＋ツールチップで識別する
+    list.forEach(function (p) {
       if (!p.cycles.length) return;
       var pts = p.cycles.map(function (c, i) { return [xOf(i), yOf(totalOf(c))]; });
-      s.push('<polyline fill="none" stroke="' + seriesVar(pi) + '" stroke-width="2" stroke-linejoin="round" ' +
+      s.push('<polyline fill="none" stroke="' + lineColor(p) + '" stroke-width="2" stroke-linejoin="round" ' +
         'stroke-linecap="round" points="' + pts.map(function (q) { return nn(q[0]) + ',' + nn(q[1]); }).join(' ') + '" />');
       var last = pts[pts.length - 1];
-      s.push('<circle cx="' + nn(last[0]) + '" cy="' + nn(last[1]) + '" r="4.5" fill="' + seriesVar(pi) +
+      s.push('<circle cx="' + nn(last[0]) + '" cy="' + nn(last[1]) + '" r="4.5" fill="' + lineColor(p) +
         '" stroke="var(--surface-1)" stroke-width="2" />');
+      if (list.length <= 6) {
+        s.push(txt(last[0] + 9, last[1], clipName(p.name, 7),
+          { baseline: 'middle', fill: 'var(--text-secondary)', size: 11 }));
+      }
     });
 
-    // クロスヘア＋ツールチップ
     var labelEvery = Math.ceil(maxN / Math.max(1, Math.floor(plotW / 34)));
     for (var i = 0; i < maxN; i++) {
       var x = xOf(i);
       if (i % labelEvery === 0 || i === maxN - 1) {
         s.push(txt(x, padT + plotH + 16, String(i + 1), { anchor: 'middle' }));
       }
-      var rows = procs().map(function (p, pi) {
+      var rows = list.map(function (p) {
         var c = p.cycles[i];
         if (!c) return '';
         return '<div class="tt-row"><span class="tt-key"><span class="tt-dot" style="background:' +
-          seriesVar(pi) + '"></span>' + esc(p.name) + '</span><span class="tt-val">' +
+          lineColor(p) + '"></span>' + esc(p.name) + '</span><span class="tt-val">' +
           fmtTime(totalOf(c)) + (c.excluded ? '（除外）' : '') + '</span></div>';
       }).join('');
       TIPS['t-' + i] = '<strong>サイクル ' + (i + 1) + '</strong>' + rows;
@@ -1217,15 +1572,17 @@
     s.push('</svg>');
     host.innerHTML = s.join('');
 
-    $('legend-trend').innerHTML = procs().map(function (p, i) {
-      return '<span class="legend__item"><span class="legend__swatch" style="background:' + seriesVar(i) +
+    $('legend-trend').innerHTML = list.map(function (p) {
+      return '<span class="legend__item"><span class="legend__swatch" style="background:' + lineColor(p) +
         '"></span>' + esc(p.name) + '</span>';
     }).join('') + (tt
       ? '<span class="legend__item" style="color:var(--critical)"><span class="legend__swatch legend__swatch--dash"></span><span style="color:var(--text-secondary)">タクトタイム</span></span>' : '');
-    $('fig-trend-sub').textContent = '縦軸：秒　横軸：サイクル No（最大 ' + maxN + ' サイクル）';
+    $('fig-trend-sub').textContent = '縦軸：秒　横軸：サイクル No（最大 ' + maxN + ' サイクル）' +
+      (dropped ? '　※線は先頭 ' + SERIES_SLOTS + ' ステーションのみ（残り ' + dropped +
+        ' は明細表と各ステーション表示で確認できます）' : '');
   }
 
-  /* -------------------------------------------- ③ サイクルタイムの推移（工程内） */
+  /* -------------------------------------------- ④ サイクルタイムの推移（ステーション内） */
   function renderCycleChart(p) {
     var host = $('chart-cycles');
     var legend = $('legend-1');
@@ -1364,7 +1721,7 @@
     return '<strong>サイクル ' + (i + 1) + '</strong>' + rows;
   }
 
-  /* -------------------------------------------- ④ サイクルタイムの分布 */
+  /* -------------------------------------------- ⑤ サイクルタイムの分布 */
   function renderHistogram(p) {
     var host = $('chart-hist');
     var sub = $('fig2-sub');
@@ -1439,7 +1796,7 @@
     sub.textContent = '縦軸：サイクル数　横軸：秒（有効 ' + totals.length + ' サイクル / ' + k + '区間）';
   }
 
-  /* -------------------------------------------- ⑤ 要素作業ごとの平均時間 */
+  /* -------------------------------------------- ⑥ 要素作業ごとの平均時間 */
   function renderElementChart(p) {
     var fig = $('fig-elements');
     var host = $('chart-elements');
@@ -1511,22 +1868,25 @@
     sub.textContent = '横棒＝平均、細線＝最小〜最大（単位：秒）';
   }
 
+
   function renderCharts() {
     TIPS = {};
-    var all = viewAll();
-    $('fig-balance').hidden = !all;
-    $('fig-trend').hidden = !all;
-    $('fig-cycles').hidden = all;
-    $('figure-grid').hidden = all;
-    if (all) {
-      renderBalanceChart();
-      renderTrendChart();
-    } else {
-      var p = viewProc();
+    var lv = viewLevel();
+    $('fig-balance').hidden = lv === 'station';
+    $('fig-groups').hidden = lv !== 'line';
+    $('fig-trend').hidden = lv !== 'group';
+    $('fig-cycles').hidden = lv !== 'station';
+    $('figure-grid').hidden = lv !== 'station';
+    if (lv === 'station') {
+      var p = viewStation();
       renderCycleChart(p);
       renderHistogram(p);
       renderElementChart(p);
+      return;
     }
+    renderBalanceChart(viewStations(), lv === 'line');
+    if (lv === 'line') renderGroupStackChart();
+    else renderTrendChart(viewStations());
   }
 
   /* ------------------------------------------------------------ ツールチップ */
@@ -1584,19 +1944,19 @@
     ];
   }
 
+  var STAT_HEAD = ['項目', '有効サイクル数', '平均(秒)', '中央値(秒)', '最小(秒)', '最大(秒)', 'レンジ(秒)', '標準偏差(秒)', 'CV(%)'];
   function statRow(label, values) {
     var s = stats(values);
     return csvRow([label, s.n, sec(s.mean), sec(s.median), sec(s.min), sec(s.max),
       sec(s.range), sec(s.sd), s.cv.toFixed(1)]);
   }
-  var STAT_HEAD = ['項目', '有効サイクル数', '平均(秒)', '中央値(秒)', '最小(秒)', '最大(秒)', 'レンジ(秒)', '標準偏差(秒)', 'CV(%)'];
 
-  /** 1工程の明細 CSV。 */
-  function buildCsvProc(settings, p) {
+  /** 1ステーションの明細 CSV。 */
+  function buildCsvStation(settings, p, groupName) {
     var els = p.elements;
     var multiEl = els.length > 1;
     var tt = (typeof settings.takt === 'number' && settings.takt > 0) ? settings.takt * 1000 : null;
-    var lines = csvHeader(settings, p.name);
+    var lines = csvHeader(settings, (groupName ? groupName + ' / ' : '') + p.name);
 
     var header = ['No', '記録時刻'];
     if (multiEl) els.forEach(function (e) { header.push(e.name + '(秒)'); });
@@ -1629,43 +1989,60 @@
     return '﻿' + lines.join('\r\n') + '\r\n';
   }
 
-  /** ライン全体（工程別マトリクス＋工程別統計）の CSV。 */
-  function buildCsvLine(settings, list) {
+  /** ライン全体 / 工程のCSV（マトリクス＋ステーション統計＋工程サマリ）。 */
+  function buildCsvLine(settings, groupList, stationList, scope) {
     var tt = (typeof settings.takt === 'number' && settings.takt > 0) ? settings.takt * 1000 : null;
-    var lines = csvHeader(settings, 'ライン全体（' + list.length + '工程）');
-    var maxN = Math.max.apply(null, list.map(function (p) { return p.cycles.length; }).concat([0]));
+    var lines = csvHeader(settings, scope);
+    var nameOf = {};
+    groupList.forEach(function (g) { nameOf[g.id] = g.name; });
+    var maxN = Math.max.apply(null, stationList.map(function (p) { return p.cycles.length; }).concat([0]));
 
-    lines.push(csvRow(['No'].concat(list.map(function (p) { return p.name + '(秒)'; }))));
+    lines.push(csvRow(['工程'].concat(stationList.map(function (p) { return nameOf[p.groupId] || ''; }))));
+    lines.push(csvRow(['No'].concat(stationList.map(function (p) { return p.name + '(秒)'; }))));
     for (var i = 0; i < maxN; i++) {
-      lines.push(csvRow([i + 1].concat(list.map(function (p) {
+      lines.push(csvRow([i + 1].concat(stationList.map(function (p) {
         var c = p.cycles[i];
         return c ? (c.excluded ? '' : sec(totalOf(c))) : '';
       }))));
     }
+
     lines.push('');
-    lines.push(csvRow(STAT_HEAD.concat(tt ? ['タクト差(秒)'] : [])));
-    var neckMean = 0;
-    list.forEach(function (p) {
+    lines.push(csvRow(['工程', 'ステーション'].concat(STAT_HEAD.slice(1)).concat(tt ? ['タクト差(秒)'] : [])));
+    var means = [];
+    stationList.forEach(function (p) {
       var act = p.cycles.filter(function (c) { return !c.excluded; });
       var s = stats(act.map(totalOf));
-      if (s.mean > neckMean) neckMean = s.mean;
-      var row = [p.name, s.n, sec(s.mean), sec(s.median), sec(s.min), sec(s.max),
-        sec(s.range), sec(s.sd), s.cv.toFixed(1)];
+      if (s.n) means.push(s.mean);
+      var row = [nameOf[p.groupId] || '', p.name, s.n, sec(s.mean), sec(s.median), sec(s.min),
+        sec(s.max), sec(s.range), sec(s.sd), s.cv.toFixed(1)];
       if (tt) row.push(sec(s.mean - tt));
       lines.push(csvRow(row));
     });
 
-    var means = list.map(function (p) {
-      return stats(p.cycles.filter(function (c) { return !c.excluded; }).map(totalOf));
-    }).filter(function (s) { return s.n; }).map(function (s) { return s.mean; });
     lines.push('');
-    if (means.length) {
-      var sum = means.reduce(function (a, b) { return a + b; }, 0);
-      lines.push(csvRow(['ネック工程の平均(秒)', sec(neckMean)]));
-      lines.push(csvRow(['工程平均の合計(秒)', sec(sum)]));
-      if (means.length > 1) {
-        lines.push(csvRow(['ラインバランス効率(%)', (sum / (means.length * neckMean) * 100).toFixed(1)]));
-      }
+    lines.push(csvRow(['工程', 'ステーション数', '合計工数(秒)', 'ネックステーション', 'ネック平均(秒)']
+      .concat(tt ? ['必要ST数'] : [])));
+    groupList.forEach(function (g) {
+      var list = stationList.filter(function (p) { return p.groupId === g.id; });
+      var sum = 0, neckMean = 0, neckName = '';
+      list.forEach(function (p) {
+        var s = stats(p.cycles.filter(function (c) { return !c.excluded; }).map(totalOf));
+        if (!s.n) return;
+        sum += s.mean;
+        if (s.mean > neckMean) { neckMean = s.mean; neckName = p.name; }
+      });
+      var row = [g.name, list.length, sec(sum), neckName || '—', neckMean ? sec(neckMean) : ''];
+      if (tt) row.push(sum ? Math.ceil(sum / tt) : '');
+      lines.push(csvRow(row));
+    });
+
+    if (means.length > 1) {
+      var mx = Math.max.apply(null, means);
+      var sm = means.reduce(function (a, b) { return a + b; }, 0);
+      lines.push('');
+      lines.push(csvRow(['ネックの平均(秒)', sec(mx)]));
+      lines.push(csvRow(['工程平均の合計(秒)', sec(sm)]));
+      lines.push(csvRow(['ラインバランス効率(%)', (sm / (means.length * mx) * 100).toFixed(1)]));
     }
     return '﻿' + lines.join('\r\n') + '\r\n';
   }
@@ -1700,7 +2077,6 @@
           var code = e && e.code;
           if (code === 'declined') return;
           if (code === 'extension_not_enabled' && /\.csv$/.test(filename)) {
-            // この環境では .csv を直接保存できないので拡張子だけ変えて渡す
             return dl.save({ filename: filename.replace(/\.csv$/, '.txt'), data: text })
               .then(function () { toast('CSVを .txt で保存しました（拡張子を .csv に変えるとExcelで開けます）'); })
               .catch(function () { toast('保存できませんでした'); });
@@ -1719,11 +2095,17 @@
     return 'CT_' + (safeName(settings.title) || 'measure') + (suffix ? '_' + safeName(suffix) : '') + '_' + stamp();
   }
 
-  function exportCsvOf(settings, list, scopeProc) {
-    var has = list.some(function (p) { return p.cycles.length; });
-    if (!has) { toast('計測データがありません'); return; }
-    if (scopeProc) download(fileBase(settings, scopeProc.name) + '.csv', buildCsvProc(settings, scopeProc), 'text/csv');
-    else download(fileBase(settings, 'line') + '.csv', buildCsvLine(settings, list), 'text/csv');
+  /** 現在の表示スコープに合わせて CSV を書き出す。 */
+  function exportCsvScoped(settings, groupList, stationList, scopeName, single) {
+    if (!stationList.some(function (p) { return p.cycles.length; })) { toast('計測データがありません'); return; }
+    if (single) {
+      var g = groupList.filter(function (x) { return x.id === single.groupId; })[0];
+      download(fileBase(settings, single.name) + '.csv',
+        buildCsvStation(settings, single, g ? g.name : ''), 'text/csv');
+    } else {
+      download(fileBase(settings, scopeName) + '.csv',
+        buildCsvLine(settings, groupList, stationList, scopeName), 'text/csv');
+    }
   }
 
   function exportJson() {
@@ -1780,17 +2162,19 @@
   }
 
   /* ------------------------------------------------------------------ イベント */
+  function stationFromEvent(b) { return stationById(b.getAttribute('data-id')); }
+
   function bind() {
-    $('btn-lap').addEventListener('click', function () { lap(procs()[0]); });
+    $('btn-lap').addEventListener('click', function () { lap(stations()[0]); });
     $('btn-pause').addEventListener('click', toggleAll);
-    $('btn-undo').addEventListener('click', function () { undo(procs()[0]); });
-    $('btn-discard').addEventListener('click', function () { discardCycle(procs()[0]); });
+    $('btn-undo').addEventListener('click', function () { undo(stations()[0]); });
+    $('btn-discard').addEventListener('click', function () { discardCycle(stations()[0]); });
     $('btn-reset').addEventListener('click', resetAll);
 
     $('pcards').addEventListener('click', function (e) {
       var b = e.target.closest('[data-act]');
       if (!b) return;
-      var p = procs()[+b.getAttribute('data-i')];
+      var p = stationFromEvent(b);
       if (!p) return;
       var act = b.getAttribute('data-act');
       if (act === 'lap') lap(p);
@@ -1799,27 +2183,41 @@
       else if (act === 'discard') discardCycle(p);
     });
 
+    $('focus-chips').addEventListener('click', function (e) {
+      var b = e.target.closest('[data-focus]');
+      if (!b) return;
+      state.focus = b.getAttribute('data-focus');
+      renderMeasure();
+      saveSoon();
+    });
+
     document.addEventListener('keydown', function (e) {
       var t = e.target;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.code === 'Space' || e.key === ' ' || e.key === 'Enter') { e.preventDefault(); lap(procs()[0]); }
-      else if (e.key >= '1' && e.key <= '9') {
-        var p = procs()[+e.key - 1];
+      if (e.code === 'Space' || e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault();
+        lap(multi() ? focusStations()[0] : stations()[0]);
+      } else if (e.key >= '1' && e.key <= '9') {
+        var p = focusStations()[+e.key - 1];
         if (p) { e.preventDefault(); lap(p); }
+      } else if (e.key === 'p' || e.key === 'P') { e.preventDefault(); toggleAll(); }
+      else if (e.key === 'z' || e.key === 'Z') {
+        e.preventDefault();
+        undo(multi() ? focusStations()[0] : stations()[0]);
       }
-      else if (e.key === 'p' || e.key === 'P') { e.preventDefault(); toggleAll(); }
-      else if (e.key === 'z' || e.key === 'Z') { e.preventDefault(); undo(procs()[0]); }
     });
 
     // 表示切替
-    $('viewswitch-chips').addEventListener('click', function (e) {
+    function onViewClick(e) {
       var b = e.target.closest('[data-view]');
       if (!b) return;
       state.view = b.getAttribute('data-view');
       renderViewSwitch(); renderTiles(); renderTables(); renderCharts();
       saveSoon();
-    });
+    }
+    $('view-groups').addEventListener('click', onViewClick);
+    $('view-stations').addEventListener('click', onViewClick);
 
     // 設定
     $('in-title').addEventListener('input', function () { state.settings.title = this.value; saveSoon(); });
@@ -1832,71 +2230,93 @@
       saveSoon();
     });
 
-    $('btn-add-proc').addEventListener('click', addProcess);
+    $('btn-add-proc').addEventListener('click', addGroup);
     $('in-proc').addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') { e.preventDefault(); addProcess(); }
+      if (e.key === 'Enter') { e.preventDefault(); addGroup(); }
     });
 
     $('proc-list').addEventListener('click', function (e) {
       var b = e.target.closest('[data-act]');
       if (!b) return;
-      var pi = +b.getAttribute('data-p');
-      var p = procs()[pi];
-      if (!p) return;
       var act = b.getAttribute('data-act');
-      if (act === 'del-proc') {
-        if (procs().length <= 1) { toast('工程は1つ以上必要です'); return; }
-        procs().splice(pi, 1);
-        if (state.view === p.id) state.view = 'all';
-        render(); save();
+      var id = b.getAttribute('data-id');
+      if (act === 'del-group') {
+        if (groups().length <= 1) { toast('工程は1つ以上必要です'); return; }
+        var g = groupById(id);
+        var rest = stations().filter(function (p) { return p.groupId !== id; });
+        if (!rest.length) { toast('ステーションが無くなるため削除できません'); return; }
+        if (stationsOf(g).length && !confirm('「' + g.name + '」と、その中の ' + stationsOf(g).length +
+          ' ステーションを削除します。よろしいですか？')) return;
+        state.stations = rest;
+        state.groups = groups().filter(function (x) { return x.id !== id; });
+        if (state.focus === id) state.focus = 'all';
+        state.view = validView(state, state.view);
+        afterStructureChange();
+      } else if (act === 'add-station') {
+        addStation(id);
+      } else if (act === 'del-station') {
+        if (stations().length <= 1) { toast('ステーションは1つ以上必要です'); return; }
+        state.stations = stations().filter(function (p) { return p.id !== id; });
+        state.view = validView(state, state.view);
+        afterStructureChange();
       } else if (act === 'del-element') {
+        var p = stationById(id);
+        if (!p) return;
         if (p.elements.length <= 1) { toast('要素作業は1つ以上必要です'); return; }
         p.elements.splice(+b.getAttribute('data-i'), 1);
-        render(); save();
+        afterStructureChange();
       } else if (act === 'add-element') {
-        addElement(p, pi);
+        addElement(id);
       }
     });
+
     $('proc-list').addEventListener('input', function (e) {
       var inp = e.target.closest('[data-act]');
       if (!inp) return;
-      var p = procs()[+inp.getAttribute('data-p')];
-      if (!p) return;
       var act = inp.getAttribute('data-act');
-      if (act === 'rename-proc') {
-        p.name = inp.value;
-        renderViewSwitch(); renderTiles(); renderTables(); renderCharts();
-        if (multi()) renderCards();
+      var id = inp.getAttribute('data-id');
+      if (act === 'rename-group') {
+        groupById(id).name = inp.value;
+        renderMeasure(); renderViewSwitch(); renderTables(); renderCharts();
+        saveSoon();
+      } else if (act === 'rename-station') {
+        var p = stationById(id);
+        if (p) p.name = inp.value;
+        renderMeasure(); renderViewSwitch(); renderTables(); renderCharts();
         saveSoon();
       } else if (act === 'rename-element') {
-        p.elements[+inp.getAttribute('data-i')].name = inp.value;
+        var st = stationById(id);
+        if (st) st.elements[+inp.getAttribute('data-i')].name = inp.value;
         renderMeasure(); renderTables(); renderCharts();
         saveSoon();
       }
     });
+
     $('proc-list').addEventListener('keydown', function (e) {
-      var inp = e.target.closest('[data-act="new-element"]');
-      if (!inp || e.key !== 'Enter') return;
+      if (e.key !== 'Enter') return;
+      var el = e.target.closest('[data-act="new-element"], [data-act="new-station"]');
+      if (!el) return;
       e.preventDefault();
-      addElement(procs()[+inp.getAttribute('data-p')], +inp.getAttribute('data-p'));
+      if (el.getAttribute('data-act') === 'new-element') addElement(el.getAttribute('data-id'));
+      else addStation(el.getAttribute('data-id'));
     });
 
     // 明細（除外・メモ）
     $('table-cycles').addEventListener('change', function (e) {
       var box = e.target.closest('[data-act="exclude"]');
       if (!box) return;
-      viewProc().cycles[+box.getAttribute('data-i')].excluded = box.checked;
+      viewStation().cycles[+box.getAttribute('data-i')].excluded = box.checked;
       render(); save();
     });
     $('table-cycles').addEventListener('input', function (e) {
       var inp = e.target.closest('[data-act="note"]');
       if (!inp) return;
-      viewProc().cycles[+inp.getAttribute('data-i')].note = inp.value;
+      viewStation().cycles[+inp.getAttribute('data-i')].note = inp.value;
       saveSoon();
     });
 
     $('btn-outlier').addEventListener('click', function () {
-      var p = viewProc();
+      var p = viewStation();
       var all = p.cycles.map(totalOf);
       if (all.length < 3) { toast('3サイクル以上必要です'); return; }
       var st = stats(all);
@@ -1909,14 +2329,17 @@
       toast(hit ? hit + ' サイクルを除外しました' : '±2σを超えるサイクルはありません');
     });
     $('btn-include-all').addEventListener('click', function () {
-      viewProc().cycles.forEach(function (c) { c.excluded = false; });
+      viewStation().cycles.forEach(function (c) { c.excluded = false; });
       render(); save();
       toast('除外を解除しました');
     });
 
     // 書き出し / 読込
     $('btn-csv').addEventListener('click', function () {
-      exportCsvOf(state.settings, procs(), viewAll() ? null : viewProc());
+      var lv = viewLevel();
+      if (lv === 'station') exportCsvScoped(state.settings, groups(), [viewStation()], null, viewStation());
+      else if (lv === 'group') exportCsvScoped(state.settings, [viewGroup()], viewStations(), viewGroup().name);
+      else exportCsvScoped(state.settings, groups(), stations(), 'ライン全体');
     });
     $('btn-json').addEventListener('click', exportJson);
     $('file-json').addEventListener('change', function () {
@@ -1940,7 +2363,8 @@
         toast('削除しました');
       } else if (act === 'csv-session' && s) {
         var st = normalize(s.data || s);
-        exportCsvOf(st.settings, st.processes, st.processes.length > 1 ? null : st.processes[0]);
+        exportCsvScoped(st.settings, st.groups, st.stations, 'ライン全体',
+          st.stations.length === 1 ? st.stations[0] : null);
       }
     });
 
@@ -1968,34 +2392,54 @@
     window.addEventListener('beforeunload', save);
   }
 
-  function addProcess() {
-    var input = $('in-proc');
-    var name = input.value.trim();
-    var list = procs();
-    if (list.length >= MAX_PROCESSES) { toast('工程は最大 ' + MAX_PROCESSES + ' 個までです'); return; }
-    list.push(newProcess(name || ('工程' + (list.length + 1))));
-    input.value = '';
-    input.focus();
-    render(); save();
+  function afterStructureChange() {
+    sortStations();
+    render();
+    save();
   }
 
-  function addElement(p, pi) {
+  function addGroup() {
+    var input = $('in-proc');
+    var name = input.value.trim();
+    if (groups().length >= MAX_GROUPS) { toast('工程は最大 ' + MAX_GROUPS + ' 個までです'); return; }
+    if (stations().length >= MAX_STATIONS) { toast('ステーションは最大 ' + MAX_STATIONS + ' 個までです'); return; }
+    var g = { id: uid(), name: name || ('工程' + (groups().length + 1)) };
+    groups().push(g);
+    state.stations.push(newStation(g.name + ' ST1', g.id));
+    input.value = '';
+    input.focus();
+    afterStructureChange();
+  }
+
+  function addStation(groupId) {
+    var input = document.querySelector('[data-act="new-station"][data-id="' + groupId + '"]');
+    var name = input ? input.value.trim() : '';
+    if (stations().length >= MAX_STATIONS) { toast('ステーションは最大 ' + MAX_STATIONS + ' 個までです'); return; }
+    var g = groupById(groupId);
+    state.stations.push(newStation(name || (g.name + ' ST' + (stationsOf(g).length + 1)), groupId));
+    afterStructureChange();
+    var again = document.querySelector('[data-act="new-station"][data-id="' + groupId + '"]');
+    if (again) again.focus();
+  }
+
+  function addElement(stationId) {
+    var p = stationById(stationId);
     if (!p) return;
-    var input = document.querySelector('[data-act="new-element"][data-p="' + pi + '"]');
+    var input = document.querySelector('[data-act="new-element"][data-id="' + stationId + '"]');
     var name = input ? input.value.trim() : '';
     if (!name) { if (input) input.focus(); return; }
     if (p.elements.length >= MAX_ELEMENTS) { toast('要素作業は最大 ' + MAX_ELEMENTS + ' 個までです'); return; }
     // 初期値の「1サイクル」だけなら置き換える
     if (p.elements.length === 1 && p.elements[0].name === '1サイクル') p.elements[0] = { id: uid(), name: name };
     else p.elements.push({ id: uid(), name: name });
-    render(); save();
-    var again = document.querySelector('[data-act="new-element"][data-p="' + pi + '"]');
+    afterStructureChange();
+    var again = document.querySelector('[data-act="new-element"][data-id="' + stationId + '"]');
     if (again) again.focus();
   }
 
   /* -------------------------------------------------------------------- 起動 */
   function tick() {
-    // 実時間で間引く。工程ごとに時計が止まるため、経過値では判定できない
+    // 実時間で間引く。ステーションごとに時計が止まるため、経過値では判定できない
     if (anyRunning()) {
       var now = performance.now();
       if (now - lastTickAt >= 50) { lastTickAt = now; renderReadout(); }

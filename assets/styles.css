@@ -506,11 +506,13 @@ main > *, .panel, .figure, .figure-grid > *, .readout > *, .table-wrap { min-wid
 .pcard__over { color: var(--critical); font-weight: 650; }
 
 /* ---------- 表示切替 ---------- */
-.viewswitch {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  padding: 4px 2px;
+.viewswitch { display: grid; gap: 6px; padding: 4px 2px; }
+.viewswitch__row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.viewswitch__label {
+  font-size: 12px; color: var(--text-secondary);
+  min-width: 2.4em;
 }
-.viewswitch__label { font-size: 12px; color: var(--text-secondary); }
+.viewswitch__label--sub { color: var(--text-muted); }
 .viewswitch__chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip {
   appearance: none; cursor: pointer;
@@ -560,3 +562,74 @@ main > *, .panel, .figure, .figure-grid > *, .readout > *, .table-wrap { min-wid
 .pcard__run--on { color: var(--success-text); font-weight: 650; }
 .pcard__run--on::before { background: var(--good); }
 .pcard[data-run="true"] { background: color-mix(in srgb, var(--pc) 5%, var(--surface-1)); }
+
+/* ---------- 工程（大）とステーション（小） ---------- */
+.focus { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.chip__n {
+  font-size: 11px; font-weight: 600; padding: 0 5px; border-radius: 999px;
+  background: var(--surface-2); color: var(--text-secondary);
+}
+.chip[aria-pressed="true"], .chip[aria-selected="true"] {
+  background: var(--text-primary); color: var(--surface-1); border-color: transparent;
+}
+.chip[aria-pressed="true"] .chip__n, .chip[aria-selected="true"] .chip__n {
+  background: rgba(255, 255, 255, .22); color: inherit;
+}
+.chip--sub { font-weight: 500; font-size: 12.5px; padding: 5px 11px; }
+
+.pgroup + .pgroup { margin-top: 14px; }
+.pgroup__head {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 8px; padding-bottom: 5px; border-bottom: 1px solid var(--grid);
+}
+.pgroup__bar {
+  width: 4px; height: 15px; border-radius: 2px; background: var(--pc, var(--series-1));
+  align-self: center; flex: none;
+}
+.pgroup__name { font-size: 14px; font-weight: 700; }
+.pgroup__meta { font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+/* ステーションが多いときの詰め表示 */
+.pcards--dense { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.pcards--dense .pcard { gap: 6px; padding: 10px; }
+.pcards--dense .pcard__time { font-size: 27px; }
+.pcards--dense .pcard__btn { min-height: 58px; font-size: 15px; }
+.pcards--dense .pcard__elem { display: none; }
+
+/* 設定：工程の中のステーション */
+.proc__count {
+  font-size: 11px; color: var(--text-secondary); padding: 1px 7px;
+  border: 1px solid var(--border); border-radius: 999px; white-space: nowrap;
+}
+.stn__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.stn {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 8px 10px; background: var(--surface-1);
+}
+.stn__head { display: flex; align-items: center; gap: 8px; }
+.stn__head input {
+  flex: 1; min-width: 0; padding: 5px 8px; font-weight: 600; font-size: 14px;
+  border: 1px solid transparent; border-radius: 6px; background: transparent;
+}
+.stn__head input:hover:not(:disabled), .stn__head input:focus {
+  border-color: var(--border); background: var(--surface-1);
+}
+.stn__els { margin-top: 6px; }
+.stn__els > summary {
+  cursor: pointer; font-size: 12px; color: var(--text-secondary);
+  padding: 2px 0; list-style-position: inside;
+}
+.stn__els > summary:hover { color: var(--text-primary); }
+.stn__els .elements__list { margin: 6px 0; }
+.stn__els .elements__item { padding: 4px 8px; }
+.help__lead { font-size: 13.5px; color: var(--text-secondary); margin: 0 0 10px; }
+
+@media (max-width: 560px) {
+  /* ステーションが多いときはスマホでも2列にしてスクロール量を抑える */
+  .pcards--dense { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pcards--dense .pcard__time { font-size: 23px; }
+  .pcards--dense .pcard__btn { min-height: 54px; font-size: 13.5px; }
+  .pcards--dense .pcard__foot { font-size: 11.5px; gap: 6px; }
+  .pcards--dense .pcard__actions .btn { padding: 6px 2px; font-size: 12px; }
+  .pcards--dense .pcard__key { display: none; }
+}
